@@ -98,12 +98,22 @@
 
     const GRAVITY = 0.29;
     const FLAP = -6.5;
-    const PIPE_GAP = 160;
     const PIPE_WIDTH = 64;
     const PIPE_INTERVAL = 1550;
     const FLOOR_HEIGHT = 76;
-    const SCROLL_SPEED = 1.8;
     const HITBOX_SHRINK = 0.7;
+
+    // difficulty scaler
+    function getDifficulty(score) {
+      // start super easy
+      const s = Math.min(score, 30); // cap effect
+      const speed = 1.45 + s * 0.028; // 1.45 -> ~2.3
+      const gap = 175 - s * 1.3;       // 175 -> ~135
+      return {
+        speed: Math.min(speed, 2.35),
+        gap: Math.max(gap, 130)
+      };
+    }
 
     // skins/store
     const SKINS = [
@@ -111,7 +121,8 @@
       { id: "skeleton", name: "Skeleton Bird", price: 100, unlockMeters: 0 },
       { id: "ghost", name: "Ghost", price: 250, unlockMeters: 0 },
       { id: "plane", name: "Aeroplane", price: 0, unlockMeters: 500 },
-      { id: "fish", name: "Fish", price: 200, unlockMeters: 0 }
+      { id: "fish", name: "Fish", price: 200, unlockMeters: 0 },
+      { id: "dino", name: "Pterodactyl", price: 300, unlockMeters: 0 }
     ];
     let activeSkin = "bird";
     let ownedSkins = { bird: true };
@@ -127,9 +138,13 @@
     let totalCoins = 0;
     let particles = [];
 
-    // underwater stuff (used when fish active)
+    // underwater stuff
     let bubbles = [];
     let seaCreatures = [];
+
+    // jurassic stuff
+    let smokePlumes = [];
+    let bgDinos = [];
 
     // home buttons
     const homeButtons = {
@@ -142,7 +157,7 @@
     let musicGain = null;
     let musicStarted = false;
     let muted = false;
-    let musicMode = "pop"; // "pop" or "sea"
+    let musicMode = "pop"; // "pop" | "sea" | "jurassic"
 
     const pauseBtn = document.getElementById("pauseBtn");
     const muteBtn = document.getElementById("muteBtn");
@@ -166,6 +181,7 @@
         maxMetersReached = parseInt(savedMeters, 10) || 0;
       }
       if (activeSkin === "fish") musicMode = "sea";
+      if (activeSkin === "dino") musicMode = "jurassic";
     } catch(e) {}
 
     function saveProgress() {
@@ -215,6 +231,31 @@
       }
     }
 
+    function initJurassic() {
+      smokePlumes = [];
+      bgDinos = [];
+      // volcano smoke
+      for (let i = 0; i < 6; i++) {
+        smokePlumes.push({
+          x: 40 + i*50,
+          y: 190 + Math.random() * 20,
+          r: 10 + Math.random() * 6,
+          v: 0.25 + Math.random() * 0.35,
+          a: 0.6
+        });
+      }
+      // background dinos
+      for (let i = 0; i < 4; i++) {
+        bgDinos.push({
+          x: Math.random() * BASE_W,
+          y: BASE_H - FLOOR_HEIGHT - 28 - Math.random()*30,
+          s: 0.25 + Math.random() * 0.15,
+          dir: Math.random() < 0.5 ? 1 : -1,
+          col: i % 2 === 0 ? "rgba(148,163,184,0.4)" : "rgba(203,213,225,0.35)"
+        });
+      }
+    }
+
     function resetGame(full = true) {
       bird = {
         x: 78,
@@ -229,10 +270,15 @@
       lastPipeTime = performance.now();
       score = 0;
       groundOffset = 0;
-      initClouds();
+
       if (activeSkin === "fish") {
         initSea();
+      } else if (activeSkin === "dino") {
+        initJurassic();
+      } else {
+        initClouds();
       }
+
       themeTarget = 0;
       themeLerp = 0;
       if (full) gameState = "home";
@@ -242,7 +288,7 @@
       return Math.floor(sc / 5) % 2;
     }
 
-    function spawnPipe() {
+    function spawnPipe(gap) {
       const maxTop = BASE_H - FLOOR_HEIGHT - 100;
       const minTop = 60;
       const topHeight = Math.floor(Math.random() * (maxTop - minTop) + minTop);
@@ -251,6 +297,7 @@
         x: BASE_W,
         top: topHeight,
         baseTop: topHeight,
+        gap: gap,
         passed: false,
         moving: canMove,
         amp: canMove ? (18 + Math.random() * 18) : 0,
@@ -258,8 +305,9 @@
         speed: 0.0018 + Math.random() * 0.0013
       });
 
+      // coins
       if (Math.random() < 0.45) {
-        const gapCenter = topHeight + PIPE_GAP / 2;
+        const gapCenter = topHeight + gap / 2;
         coins.push({
           x: BASE_W + PIPE_WIDTH / 2,
           y: gapCenter,
@@ -300,8 +348,6 @@
         musicGain.gain.value = 0.48;
         musicGain.connect(audioCtx.destination);
       }
-
-      // we use a looping scheduler that checks musicMode
       if (!musicStarted) {
         musicStarted = true;
         scheduleMusicLoop();
@@ -314,14 +360,13 @@
 
       if (musicMode === "pop") {
         playPopBar(startTime);
-        setTimeout(() => {
-          if (!muted) scheduleMusicLoop();
-        }, 2200);
-      } else {
+        setTimeout(() => { if (!muted) scheduleMusicLoop(); }, 2200);
+      } else if (musicMode === "sea") {
         playSeaBar(startTime);
-        setTimeout(() => {
-          if (!muted) scheduleMusicLoop();
-        }, 2400);
+        setTimeout(() => { if (!muted) scheduleMusicLoop(); }, 2400);
+      } else {
+        playJurassicBar(startTime);
+        setTimeout(() => { if (!muted) scheduleMusicLoop(); }, 2400);
       }
     }
 
@@ -375,7 +420,6 @@
       }
     }
 
-    // slightly calypso / "under the sea"-ish
     function playSeaBar(t0) {
       const tempo = 95;
       const beat = 60 / tempo;
@@ -424,6 +468,55 @@
       }
     }
 
+    // Jurassic / tribal-ish
+    function playJurassicBar(t0) {
+      const tempo = 90;
+      const beat = 60 / tempo;
+      const bassNotes = [110, 98, 123, 98];
+
+      for (let i = 0; i < 4; i++) {
+        const t = t0 + i * beat;
+
+        // heavy drum
+        const drum = audioCtx.createOscillator();
+        drum.type = "sine";
+        const dg = audioCtx.createGain();
+        dg.gain.setValueAtTime(0.85, t);
+        dg.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+        drum.frequency.setValueAtTime(70, t);
+        drum.frequency.exponentialRampToValueAtTime(32, t + 0.35);
+        drum.connect(dg).connect(musicGain);
+        drum.start(t);
+        drum.stop(t + 0.4);
+
+        // tom / floor
+        if (i === 1 || i === 3) {
+          const tom = audioCtx.createOscillator();
+          tom.type = "triangle";
+          const tg = audioCtx.createGain();
+          tg.gain.setValueAtTime(0.55, t + 0.02);
+          tg.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+          tom.frequency.setValueAtTime(150, t + 0.02);
+          tom.frequency.exponentialRampToValueAtTime(90, t + 0.32);
+          tom.connect(tg).connect(musicGain);
+          tom.start(t + 0.02);
+          tom.stop(t + 0.35);
+        }
+
+        // "brassy" call (fake)
+        const lead = audioCtx.createOscillator();
+        lead.type = "sawtooth";
+        lead.frequency.value = bassNotes[i % bassNotes.length];
+        const lg = audioCtx.createGain();
+        lg.gain.setValueAtTime(0.0, t + 0.05);
+        lg.gain.linearRampToValueAtTime(0.4, t + 0.1);
+        lg.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+        lead.connect(lg).connect(musicGain);
+        lead.start(t + 0.05);
+        lead.stop(t + 0.5);
+      }
+    }
+
     canvas.addEventListener("mousedown", tapHandler);
     canvas.addEventListener("touchstart", (e) => {
       e.preventDefault();
@@ -453,7 +546,6 @@
 
       if (gameState === "store") {
         const storeRects = getStoreRects();
-        // back button
         const backBtn = getStoreBackButton();
         if (pointInRect(mx, my, backBtn)) {
           gameState = "home";
@@ -543,6 +635,29 @@
       }
     }
 
+    function moveJurassic(dt) {
+      for (let s of smokePlumes) {
+        s.y -= s.v;
+        s.a -= 0.0025;
+        if (s.a <= 0.05) {
+          s.y = 190 + Math.random() * 20;
+          s.a = 0.6;
+          s.r = 10 + Math.random() * 6;
+        }
+      }
+      for (let d of bgDinos) {
+        d.x += d.s * d.dir;
+        if (d.dir > 0 && d.x - 30 > BASE_W + 10) {
+          d.x = -30;
+          d.y = BASE_H - FLOOR_HEIGHT - 28 - Math.random()*30;
+        }
+        if (d.dir < 0 && d.x + 30 < -10) {
+          d.x = BASE_W + 20;
+          d.y = BASE_H - FLOOR_HEIGHT - 28 - Math.random()*30;
+        }
+      }
+    }
+
     function spawnCoinBurst(x, y) {
       for (let i = 0; i < 6; i++) {
         particles.push({
@@ -573,42 +688,47 @@
       particles = particles.filter(p => p.life > 0);
 
       if (gameState === "home" || gameState === "store") {
-        if (activeSkin === "fish") {
-          moveBubbles(dt);
-        } else {
-          moveClouds(dt);
-        }
+        if (activeSkin === "fish") moveBubbles(dt);
+        else if (activeSkin === "dino") moveJurassic(dt);
+        else moveClouds(dt);
+
         if (gameState === "home") {
           bird.y = BASE_H/2 + Math.sin(now * 0.004) * 8;
         }
         return;
       }
       if (gameState === "paused") {
-        if (activeSkin === "fish") moveBubbles(dt); else moveClouds(dt);
+        if (activeSkin === "fish") moveBubbles(dt);
+        else if (activeSkin === "dino") moveJurassic(dt);
+        else moveClouds(dt);
         return;
       }
       if (gameState === "gameover") {
-        if (activeSkin === "fish") moveBubbles(dt); else moveClouds(dt);
+        if (activeSkin === "fish") moveBubbles(dt);
+        else if (activeSkin === "dino") moveJurassic(dt);
+        else moveClouds(dt);
         return;
       }
 
       // playing
-      if (activeSkin !== "fish") {
+      if (activeSkin !== "fish" && activeSkin !== "dino") {
         themeTarget = getThemeTargetFromScore(score);
         themeLerp += (themeTarget - themeLerp) * THEME_LERP_SPEED;
       }
+
+      const diff = getDifficulty(score);
 
       bird.vy += GRAVITY;
       bird.y += bird.vy;
       bird.anim += dt * 0.01;
 
       if (now - lastPipeTime > PIPE_INTERVAL) {
-        spawnPipe();
+        spawnPipe(diff.gap);
         lastPipeTime = now;
       }
 
       for (let p of pipes) {
-        p.x -= SCROLL_SPEED;
+        p.x -= diff.speed;
         if (p.moving) {
           p.top = p.baseTop + Math.sin(now * p.speed + p.phase) * p.amp;
           const maxTop = BASE_H - FLOOR_HEIGHT - 100;
@@ -620,18 +740,20 @@
       pipes = pipes.filter(p => p.x + PIPE_WIDTH > -10);
 
       for (let c of coins) {
-        c.x -= SCROLL_SPEED;
+        c.x -= diff.speed;
         c.t += dt * 0.008;
       }
       coins = coins.filter(c => !c.collected && c.x + c.r > -10);
 
       if (activeSkin === "fish") {
         moveBubbles(dt);
+      } else if (activeSkin === "dino") {
+        moveJurassic(dt);
       } else {
         moveClouds(dt);
       }
 
-      groundOffset -= SCROLL_SPEED;
+      groundOffset -= diff.speed;
       if (groundOffset <= -72) groundOffset = 0;
 
       const bx = bird.x;
@@ -655,7 +777,7 @@
       for (let p of pipes) {
         const inX = bx + hitR > p.x && bx - hitR < p.x + PIPE_WIDTH;
         const gapTop = p.top;
-        const gapBottom = p.top + PIPE_GAP;
+        const gapBottom = p.top + p.gap;
         if (inX) {
           const pad = 4;
           if (by - hitR < gapTop - pad || by + hitR > gapBottom + pad) {
@@ -735,6 +857,63 @@
           ctx.stroke();
         }
 
+      } else if (activeSkin === "dino") {
+        // jurassic
+        const grad = ctx.createLinearGradient(0,0,0,BASE_H);
+        grad.addColorStop(0, "#0f172a");
+        grad.addColorStop(0.3, "#14532d");
+        grad.addColorStop(1, "#78350f");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0,BASE_W,BASE_H);
+
+        // volcanoes
+        ctx.fillStyle = "#451a03";
+        // volcano 1
+        ctx.beginPath();
+        ctx.moveTo(30, 300);
+        ctx.lineTo(90, 150);
+        ctx.lineTo(150, 300);
+        ctx.closePath();
+        ctx.fill();
+        // lava
+        ctx.fillStyle = "#f97316";
+        ctx.fillRect(88, 150, 8, 16);
+
+        // volcano 2
+        ctx.fillStyle = "#3f1f0f";
+        ctx.beginPath();
+        ctx.moveTo(200, 320);
+        ctx.lineTo(270, 180);
+        ctx.lineTo(340, 320);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#f97316";
+        ctx.fillRect(266, 180, 8, 16);
+
+        // smoke
+        for (let s of smokePlumes) {
+          ctx.fillStyle = `rgba(226,232,240,${s.a})`;
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // background dinos
+        for (let d of bgDinos) {
+          ctx.fillStyle = d.col;
+          ctx.beginPath();
+          ctx.ellipse(d.x, d.y, 28, 14, 0, 0, Math.PI * 2);
+          ctx.fill();
+          // neck
+          ctx.beginPath();
+          ctx.moveTo(d.x + 12 * d.dir, d.y - 2);
+          ctx.lineTo(d.x + 20 * d.dir, d.y - 24);
+          ctx.lineTo(d.x + 30 * d.dir, d.y - 22);
+          ctx.lineTo(d.x + 16 * d.dir, d.y - 1);
+          ctx.closePath();
+          ctx.fill();
+        }
+
       } else {
         const daySkyTop = [151, 216, 255];
         const daySkyBot = [219, 243, 255];
@@ -790,28 +969,61 @@
 
     function drawPipes() {
       if (activeSkin === "fish") {
-        // underwater pipes = coral towers
+        // coral
         for (let p of pipes) {
           const g = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
           g.addColorStop(0, "rgba(13,148,136,0.95)");
           g.addColorStop(1, "rgba(22,101,114,0.82)");
           ctx.fillStyle = g;
 
-          // top coral
           ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
           ctx.fillStyle = "rgba(226,232,240,0.6)";
           ctx.fillRect(p.x - 3, p.top - 10, PIPE_WIDTH + 6, 10);
 
-          // bottom coral
-          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + PIPE_GAP);
+          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + p.gap);
           ctx.fillStyle = g;
-          ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
+          ctx.fillRect(p.x, p.top + p.gap, PIPE_WIDTH, bottomH);
           ctx.fillStyle = "rgba(226,232,240,0.6)";
-          ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 10);
+          ctx.fillRect(p.x - 3, p.top + p.gap, PIPE_WIDTH + 6, 10);
 
           if (p.moving) {
             ctx.fillStyle = "rgba(236,252,203,0.6)";
             ctx.fillRect(p.x + PIPE_WIDTH/2 - 3, p.top - 20, 6, 6);
+          }
+        }
+      } else if (activeSkin === "dino") {
+        // bone pipes
+        for (let p of pipes) {
+          const boneCol = "rgba(248,250,252,0.92)";
+          const boneEdge = "rgba(148,163,184,0.6)";
+
+          // top bone
+          ctx.fillStyle = boneCol;
+          ctx.fillRect(p.x + 10, 0, PIPE_WIDTH - 20, p.top - 12);
+          // top head
+          ctx.beginPath();
+          ctx.fillStyle = boneCol;
+          ctx.roundRect(p.x - 2, p.top - 22, PIPE_WIDTH + 4, 22, 10);
+          ctx.fill();
+          ctx.strokeStyle = boneEdge;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // bottom bone
+          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + p.gap);
+          ctx.fillStyle = boneCol;
+          ctx.fillRect(p.x + 10, p.top + p.gap + 12, PIPE_WIDTH - 20, bottomH - 12);
+          // bottom head
+          ctx.beginPath();
+          ctx.fillStyle = boneCol;
+          ctx.roundRect(p.x - 2, p.top + p.gap, PIPE_WIDTH + 4, 22, 10);
+          ctx.fill();
+          ctx.strokeStyle = boneEdge;
+          ctx.stroke();
+
+          if (p.moving) {
+            ctx.fillStyle = "rgba(249,115,22,0.7)";
+            ctx.fillRect(p.x + PIPE_WIDTH/2 - 4, p.top - 32, 8, 8);
           }
         }
       } else {
@@ -830,11 +1042,11 @@
           ctx.fillStyle = lipColor;
           ctx.fillRect(p.x - 3, p.top - 16, PIPE_WIDTH + 6, 16);
 
-          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + PIPE_GAP);
+          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + p.gap);
           ctx.fillStyle = grad;
-          ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
+          ctx.fillRect(p.x, p.top + p.gap, PIPE_WIDTH, bottomH);
           ctx.fillStyle = lipColor;
-          ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+          ctx.fillRect(p.x - 3, p.top + p.gap, PIPE_WIDTH + 6, 16);
 
           if (p.moving) {
             ctx.fillStyle = "rgba(255,255,255,0.35)";
@@ -860,6 +1072,15 @@
           ctx.moveTo(x, BASE_H - 6);
           ctx.quadraticCurveTo(x - 6, BASE_H - 26, x + 4, BASE_H - 46);
           ctx.stroke();
+        }
+      } else if (activeSkin === "dino") {
+        // rocky ground
+        ctx.fillStyle = "#451a03";
+        ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, FLOOR_HEIGHT);
+        // ash
+        ctx.fillStyle = "rgba(248,250,252,0.02)";
+        for (let x = 0; x < BASE_W; x += 22) {
+          ctx.fillRect(x, BASE_H - 26, 18, 4);
         }
       } else {
         const groundCol = lerpColor([212,170,99],[47,43,50], themeLerp);
@@ -1239,6 +1460,66 @@
       ctx.fill();
     }
 
+    function drawSkinDino() {
+      // pterodactyl vibe
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      ctx.beginPath();
+      ctx.ellipse(0, 12, 20, 6, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#000";
+      ctx.fill();
+      ctx.restore();
+
+      // body
+      const bodyGrad = ctx.createLinearGradient(-18, -14, 20, 14);
+      bodyGrad.addColorStop(0, "#f97316");
+      bodyGrad.addColorStop(1, "#b45309");
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 16, 11, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // wings
+      const wingFlap = Math.sin(bird.anim * 12) * 0.5;
+      ctx.save();
+      ctx.rotate(wingFlap);
+      ctx.fillStyle = "rgba(248,250,252,0.08)";
+      ctx.beginPath();
+      ctx.moveTo(-2, 0);
+      ctx.lineTo(-40, -16);
+      ctx.lineTo(-36, 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.rotate(-wingFlap);
+      ctx.fillStyle = "rgba(248,250,252,0.08)";
+      ctx.beginPath();
+      ctx.moveTo(-2, 0);
+      ctx.lineTo(24, -22);
+      ctx.lineTo(12, 12);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      // head
+      ctx.fillStyle = "#f97316";
+      ctx.beginPath();
+      ctx.moveTo(8, -2);
+      ctx.lineTo(28, 0);
+      ctx.lineTo(10, 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // eye
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.arc(6, -3, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     function drawBird() {
       ctx.save();
       ctx.translate(bird.x, bird.y);
@@ -1257,6 +1538,8 @@
         drawSkinPlane();
       } else if (activeSkin === "fish") {
         drawSkinFish();
+      } else if (activeSkin === "dino") {
+        drawSkinDino();
       } else {
         drawSkinBird();
       }
@@ -1434,8 +1717,12 @@
       if (activeSkin === "fish") {
         musicMode = "sea";
         initSea();
+      } else if (activeSkin === "dino") {
+        musicMode = "jurassic";
+        initJurassic();
       } else {
         musicMode = "pop";
+        initClouds();
       }
       startMusicIfNeeded();
     }
