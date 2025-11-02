@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Flappy-ish Bird v9 (Store + Characters)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #06263b 0%, #021017 56%, #000 100%);
+      display: flex;
+      height: 100vh;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #gameWrap {
+      position: relative;
+      box-shadow: 0 30px 65px rgba(0,0,0,0.45);
+      border-radius: 18px;
+      overflow: hidden;
+      outline: 1px solid rgba(255,255,255,0.04);
+    }
+    canvas {
+      border-radius: 18px;
+      background: #7ed0ff;
+    }
+    #msg {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      padding: 6px 10px;
+      background: rgba(0,0,0,0.35);
+      color: #fff;
+      font-size: 14px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameWrap">
+    <canvas id="game" width="360" height="540"></canvas>
+    <div id="msg">Play or open Store to buy birds with coins.</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    // game states
+    // "home", "playing", "gameover", "store"
+    let gameState = "home";
+
+    // constants
+    const GRAVITY = 0.29;
+    const FLAP = -6.5;
+    const PIPE_GAP = 160;
+    const PIPE_WIDTH = 64;
+    const PIPE_INTERVAL = 1650;
+    const FLOOR_HEIGHT = 76;
+    const SCROLL_SPEED = 1.8;
+    const HITBOX_SHRINK = 0.7;
+
+    // theme fade
+    let themeLerp = 0;
+    let themeTarget = 0;
+    const THEME_LERP_SPEED = 0.08;
+
+    // coins
+    let coins = [];
+    const COIN_BASE_RADIUS = 11;
+    const COIN_SPAWN_CHANCE = 0.5;
+    let totalCoins = 0;
+
+    // particles
+    let particles = [];
+
+    // characters (store)
+    const CHARACTERS = [
+      { id: "default", name: "Sunny Bird", price: 0, desc: "Standard yellow", owned: true },
+      { id: "red", name: "Red Blaze", price: 20, desc: "Spicy red skin", owned: false },
+      { id: "shadow", name: "Shadow Wing", price: 50, desc: "Night stealth", owned: false },
+    ];
+    let ownedChars = new Set(["default"]);
+    let selectedChar = "default";
+
+    // load persistent data
+    try {
+      const savedCoins = localStorage.getItem("flappyCoins");
+      if (savedCoins !== null) totalCoins = parseInt(savedCoins, 10) || 0;
+
+      const savedOwned = localStorage.getItem("flappyOwnedChars");
+      if (savedOwned) {
+        const arr = JSON.parse(savedOwned);
+        ownedChars = new Set(arr);
+      }
+
+      const savedSelected = localStorage.getItem("flappySelectedChar");
+      if (savedSelected) selectedChar = savedSelected;
+    } catch(e) {}
+
+    // apply ownership flags to CHARACTERS
+    for (let c of CHARACTERS) {
+      if (ownedChars.has(c.id)) c.owned = true;
+    }
+
+    // other game vars
+    let bird, pipes, lastPipeTime, score, best, bgClouds, groundOffset;
+    best = 0;
+
+    // UI buttons
+    const playBtn = { x: 55, y: 295, w: 120, h: 58 };
+    const storeBtn = { x: 195, y: 295, w: 120, h: 58 };
+
+    function resetGame(full = true) {
+      bird = {
+        x: 78,
+        y: canvas.height / 2,
+        vy: 0,
+        r: 16,
+        anim: 0
+      };
+      pipes = [];
+      coins = [];
+      particles = [];
+      lastPipeTime = performance.now();
+      score = 0;
+      groundOffset = 0;
+      initClouds();
+      themeTarget = 0;
+      themeLerp = 0;
+      if (full) gameState = "home";
+    }
+
+    function getThemeTargetFromScore(sc) {
+      return Math.floor(sc / 5) % 2;
+    }
+
+    function initClouds() {
+      bgClouds = [];
+      for (let i = 0; i < 6; i++) {
+        bgClouds.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * 180 + 20,
+          w: Math.random() * 60 + 40,
+          h: Math.random() * 18 + 10,
+          s: Math.random() * 0.5 + 0.15
+        });
+      }
+    }
+
+    function spawnPipe() {
+      const maxTop = canvas.height - FLOOR_HEIGHT - 100;
+      const minTop = 60;
+      const topHeight = Math.floor(Math.random() * (maxTop - minTop) + minTop);
+      pipes.push({
+        x: canvas.width,
+        top: topHeight,
+        passed: false
+      });
+
+      if (Math.random() < COIN_SPAWN_CHANCE) {
+        const gapCenter = topHeight + PIPE_GAP / 2;
+        coins.push({
+          x: canvas.width + PIPE_WIDTH / 2,
+          y: gapCenter,
+          r: COIN_BASE_RADIUS,
+          t: Math.random() * Math.PI * 2,
+          collected: false,
+          glow: 1
+        });
+      }
+    }
+
+    function startPlaying() {
+      gameState = "playing";
+      bird.vy = 0;
+    }
+
+    function goToStore() {
+      gameState = "store";
+    }
+
+    function flap() {
+      if (gameState === "home") {
+        startPlaying();
+        return;
+      }
+      if (gameState === "store") {
+        // clicking in store doesn't flap
+        return;
+      }
+      if (gameState === "gameover") {
+        resetGame(true);
+        return;
+      }
+      bird.vy = FLAP;
+    }
+
+    canvas.addEventListener("mousedown", e => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      if (gameState === "home") {
+        if (pointInRect(mx, my, playBtn)) {
+          startPlaying();
+          return;
+        }
+        if (pointInRect(mx, my, storeBtn)) {
+          goToStore();
+          return;
+        }
+      } else if (gameState === "store") {
+        handleStoreClick(mx, my);
+        return;
+      } else if (gameState === "gameover") {
+        resetGame(true);
+        return;
+      }
+
+      flap();
+    });
+
+    canvas.addEventListener("touchstart", e => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const touch = e.touches[0];
+      const mx = touch.clientX - rect.left;
+      const my = touch.clientY - rect.top;
+
+      if (gameState === "home") {
+        if (pointInRect(mx, my, playBtn)) {
+          startPlaying();
+          return;
+        }
+        if (pointInRect(mx, my, storeBtn)) {
+          goToStore();
+          return;
+        }
+      } else if (gameState === "store") {
+        handleStoreClick(mx, my);
+        return;
+      } else if (gameState === "gameover") {
+        resetGame(true);
+        return;
+      }
+
+      flap();
+    }, {passive:false});
+
+    document.addEventListener("keydown", e => {
+      if (e.code === "Escape") {
+        if (gameState === "store") {
+          gameState = "home";
+          return;
+        }
+      }
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        flap();
+      }
+      if (e.code === "KeyR") {
+        resetGame(true);
+      }
+    });
+
+    function pointInRect(x, y, rect) {
+      return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+    }
+
+    function handleStoreClick(mx, my) {
+      // back button
+      const backBtn = { x: 24, y: 24, w: 70, h: 32 };
+      if (pointInRect(mx, my, backBtn)) {
+        gameState = "home";
+        return;
+      }
+
+      // cards
+      const startX = 30;
+      const startY = 110;
+      const cardW = 140;
+      const cardH = 140;
+      const gapX = 15;
+      for (let i = 0; i < CHARACTERS.length; i++) {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const cx = startX + col * (cardW + gapX);
+        const cy = startY + row * (cardH + 14);
+        const cardRect = { x: cx, y: cy, w: cardW, h: cardH };
+        if (pointInRect(mx, my, cardRect)) {
+          selectOrBuyCharacter(CHARACTERS[i]);
+          return;
+        }
+      }
+    }
+
+    function selectOrBuyCharacter(ch) {
+      if (ownedChars.has(ch.id)) {
+        selectedChar = ch.id;
+        try {
+          localStorage.setItem("flappySelectedChar", selectedChar);
+        } catch(e) {}
+        return;
+      }
+      // not owned, try buy
+      if (totalCoins >= ch.price) {
+        totalCoins -= ch.price;
+        ownedChars.add(ch.id);
+        ch.owned = true;
+        selectedChar = ch.id;
+        try {
+          localStorage.setItem("flappyCoins", totalCoins.toString());
+          localStorage.setItem("flappyOwnedChars", JSON.stringify(Array.from(ownedChars)));
+          localStorage.setItem("flappySelectedChar", selectedChar);
+        } catch(e) {}
+      } else {
+        // not enough coins: maybe small shake? for now do nothing
+      }
+    }
+
+    function update(dt, now) {
+      themeTarget = getThemeTargetFromScore(score);
+      themeLerp += (themeTarget - themeLerp) * THEME_LERP_SPEED;
+
+      // update particles
+      for (let p of particles) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.04;
+        p.vy += 0.02;
+      }
+      particles = particles.filter(p => p.life > 0);
+
+      if (gameState !== "playing") {
+        moveClouds(dt);
+        if (gameState === "home" || gameState === "store") {
+          bird.y = canvas.height/2 + Math.sin(now * 0.004) * 8;
+        }
+        return;
+      }
+
+      bird.vy += GRAVITY;
+      bird.y += bird.vy;
+      bird.anim += dt * 0.01;
+
+      if (now - lastPipeTime > PIPE_INTERVAL) {
+        spawnPipe();
+        lastPipeTime = now;
+      }
+
+      for (let p of pipes) p.x -= SCROLL_SPEED;
+      pipes = pipes.filter(p => p.x + PIPE_WIDTH > -10);
+
+      // coins move
+      for (let c of coins) {
+        c.x -= SCROLL_SPEED;
+        c.t += dt * 0.008;
+        c.glow += (1 - c.glow) * 0.1;
+      }
+      coins = coins.filter(c => !c.collected && c.x + c.r > -10);
+
+      moveClouds(dt);
+      groundOffset -= SCROLL_SPEED;
+      if (groundOffset <= -72) groundOffset = 0;
+
+      const bx = bird.x;
+      const by = bird.y;
+      const hitR = bird.r * HITBOX_SHRINK;
+
+      // coin collision
+      for (let c of coins) {
+        const dx = bx - c.x;
+        const dy = by - c.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < hitR + c.r * 0.85) {
+          c.collected = true;
+          totalCoins += 1;
+          spawnCoinBurst(c.x, c.y);
+          try { localStorage.setItem("flappyCoins", totalCoins.toString()); } catch(e){}
+        }
+      }
+
+      // pipe collision + score
+      for (let p of pipes) {
+        const inX = bx + hitR > p.x && bx - hitR < p.x + PIPE_WIDTH;
+        const gapTop = p.top;
+        const gapBottom = p.top + PIPE_GAP;
+        if (inX) {
+          const pad = 4;
+          if (by - hitR < gapTop - pad || by + hitR > gapBottom + pad) {
+            die();
+          }
+        }
+        if (!p.passed && p.x + PIPE_WIDTH < bx) {
+          p.passed = true;
+          score++;
+          if (score > best) best = score;
+        }
+      }
+
+      if (by + hitR > canvas.height - FLOOR_HEIGHT || by - hitR < 0) {
+        die();
+      }
+    }
+
+    function spawnCoinBurst(x, y) {
+      for (let i = 0; i < 6; i++) {
+        particles.push({
+          x,
+          y,
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 1.6) * 2,
+          life: 1,
+          c: i % 2 === 0 ? "rgba(255,220,120,1)" : "rgba(255,180,60,1)"
+        });
+      }
+    }
+
+    function moveClouds(dt) {
+      for (let c of bgClouds) {
+        c.x -= c.s;
+        if (c.x + c.w < -10) {
+          c.x = canvas.width + 30;
+          c.y = Math.random() * 180 + 20;
+        }
+      }
+    }
+
+    function die() {
+      gameState = "gameover";
+    }
+
+    function lerpColor(c1, c2, t) {
+      return [
+        c1[0] + (c2[0] - c1[0]) * t,
+        c1[1] + (c2[1] - c1[1]) * t,
+        c1[2] + (c2[2] - c1[2]) * t,
+      ];
+    }
+
+    function drawBackground() {
+      const dayTop = [126, 208, 255];
+      const dayMid = [201, 239, 255];
+      const dayBot = [253, 240, 213];
+      const nightTop = [7, 25, 40];
+      const nightMid = [13, 48, 71];
+      const nightBot = [32, 44, 58];
+
+      const top = lerpColor(dayTop, nightTop, themeLerp);
+      const mid = lerpColor(dayMid, nightMid, themeLerp);
+      const bot = lerpColor(dayBot, nightBot, themeLerp);
+
+      const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+      grad.addColorStop(0, `rgb(${top[0]},${top[1]},${top[2]})`);
+      grad.addColorStop(0.6, `rgb(${mid[0]},${mid[1]},${mid[2]})`);
+      grad.addColorStop(1, `rgb(${bot[0]},${bot[1]},${bot[2]})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      const starAlpha = themeLerp * 0.9;
+      if (starAlpha > 0.02) {
+        ctx.fillStyle = `rgba(255,255,255,${starAlpha})`;
+        for (let i = 0; i < 25; i++) {
+          const x = (i * 14 + (score*3)) % canvas.width;
+          const y = (i * 19) % 160;
+          ctx.fillRect(x, y, 2, 2);
+        }
+        ctx.fillStyle = `rgba(255,255,255,${0.8 * themeLerp})`;
+        ctx.beginPath();
+        ctx.arc(54, 64, 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(7,25,40,${0.5 * themeLerp})`;
+        ctx.beginPath();
+        ctx.arc(64, 58, 20, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (let c of bgClouds) {
+        const cloudAlpha = 0.9 - 0.7 * themeLerp;
+        ctx.fillStyle = `rgba(255,255,255,${cloudAlpha})`;
+        ctx.beginPath();
+        ctx.roundRect(c.x, c.y, c.w, c.h, 12);
+        ctx.fill();
+      }
+    }
+
+    function drawPipes() {
+      for (let p of pipes) {
+        const c1 = lerpColor([46,159,69],[43,58,85], themeLerp);
+        const c2 = lerpColor([62,207,91],[61,83,116], themeLerp);
+        const c3 = lerpColor([43,127,59],[31,40,55], themeLerp);
+        const grad = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+        grad.addColorStop(0, `rgb(${c1[0]},${c1[1]},${c1[2]})`);
+        grad.addColorStop(0.5, `rgb(${c2[0]},${c2[1]},${c2[2]})`);
+        grad.addColorStop(1, `rgb(${c3[0]},${c3[1]},${c3[2]})`);
+        ctx.fillStyle = grad;
+
+        ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+        const lipColor = `rgba(${Math.floor(217 - 60*themeLerp)},${Math.floor(255 - 60*themeLerp)},${Math.floor(212 - 60*themeLerp)},${1 - 0.4*themeLerp})`;
+        ctx.fillStyle = lipColor;
+        ctx.fillRect(p.x - 3, p.top - 16, PIPE_WIDTH + 6, 16);
+
+        const bottomH = canvas.height - FLOOR_HEIGHT - (p.top + PIPE_GAP);
+        ctx.fillStyle = grad;
+        ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
+        ctx.fillStyle = lipColor;
+        ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+      }
+    }
+
+    function drawGround() {
+      const groundCol = lerpColor([212,170,99],[47,43,50], themeLerp);
+      ctx.fillStyle = `rgb(${groundCol[0]},${groundCol[1]},${groundCol[2]})`;
+      ctx.fillRect(0, canvas.height - FLOOR_HEIGHT, canvas.width, FLOOR_HEIGHT);
+
+      const grassCol = lerpColor([99,184,64],[63,95,72], themeLerp);
+      ctx.fillStyle = `rgb(${grassCol[0]},${grassCol[1]},${grassCol[2]})`;
+      ctx.fillRect(0, canvas.height - FLOOR_HEIGHT, canvas.width, 14);
+
+      const patternAlpha = 0.1 - 0.06 * themeLerp;
+      ctx.fillStyle = `rgba(0,0,0,${Math.max(patternAlpha,0)})`;
+      for (let x = groundOffset; x < canvas.width + 72; x += 72) {
+        ctx.fillRect(x, canvas.height - FLOOR_HEIGHT + 16, 48, 14);
+      }
+    }
+
+    function drawBird() {
+      ctx.save();
+      ctx.translate(bird.x, bird.y);
+      const tilt = (gameState === "home" || gameState === "store")
+        ? Math.sin(performance.now() * 0.004) * 0.15
+        : Math.min(Math.max(bird.vy / 10, -0.45), 0.6);
+      ctx.rotate(tilt);
+
+      // pick color based on selectedChar
+      let base1, base2, wingCol, cheekCol, beakCol;
+      if (selectedChar === "default") {
+        base1 = lerpColor([255,217,102],[255,226,168], themeLerp);
+        base2 = lerpColor([255,174,0],[255,193,78], themeLerp);
+        wingCol = lerpColor([255,233,168],[255,244,216], themeLerp);
+        cheekCol = lerpColor([255,120,120],[255,196,196], themeLerp);
+        beakCol = lerpColor([255,123,26],[255,156,70], themeLerp);
+      } else if (selectedChar === "red") {
+        base1 = lerpColor([255,120,120],[255,166,166], themeLerp);
+        base2 = lerpColor([232,46,46],[244,106,106], themeLerp);
+        wingCol = lerpColor([255,214,214],[255,236,236], themeLerp);
+        cheekCol = lerpColor([255,210,210],[255,230,230], themeLerp);
+        beakCol = lerpColor([255,131,60],[255,171,102], themeLerp);
+      } else {
+        // shadow
+        base1 = lerpColor([187,210,255],[162,186,224], themeLerp);
+        base2 = lerpColor([60,73,108],[46,58,90], themeLerp);
+        wingCol = lerpColor([207,219,255],[184,198,224], themeLerp);
+        cheekCol = lerpColor([142,162,206],[124,142,184], themeLerp);
+        beakCol = lerpColor([255,206,116],[255,197,96], themeLerp);
+      }
+
+      const grd = ctx.createLinearGradient(-12, -16, 24, 16);
+      grd.addColorStop(0, `rgb(${base1[0]},${base1[1]},${base1[2]})`);
+      grd.addColorStop(1, `rgb(${base2[0]},${base2[1]},${base2[2]})`);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const wingOffset = Math.sin(bird.anim * 8) * 4;
+      ctx.save();
+      ctx.translate(-6, 4 + wingOffset);
+      ctx.fillStyle = `rgb(${wingCol[0]},${wingCol[1]},${wingCol[2]})`;
+      ctx.beginPath();
+      ctx.roundRect(-10, -6, 20, 12, 6);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(9, -6, 5.2, 0, Math.PI * 2);
+      ctx.fill();
+      const pupilCol = lerpColor([0,0,0],[15,23,42], themeLerp);
+      ctx.fillStyle = `rgb(${pupilCol[0]},${pupilCol[1]},${pupilCol[2]})`;
+      ctx.beginPath();
+      ctx.arc(11, -6, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgba(${cheekCol[0]},${cheekCol[1]},${cheekCol[2]},0.6)`;
+      ctx.beginPath();
+      ctx.arc(-3, 4, 3.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgb(${beakCol[0]},${beakCol[1]},${beakCol[2]})`;
+      ctx.beginPath();
+      ctx.moveTo(18, -2);
+      ctx.lineTo(30, 2);
+      ctx.lineTo(18, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawCoins() {
+      for (let c of coins) {
+        // glow
+        const glowRadius = c.r * 2.1;
+        ctx.save();
+        ctx.globalAlpha = 0.35 + 0.25 * Math.sin(c.t * 2);
+        const gradGlow = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, glowRadius);
+        gradGlow.addColorStop(0, "rgba(255,220,120,1)");
+        gradGlow.addColorStop(1, "rgba(255,220,120,0)");
+        ctx.fillStyle = gradGlow;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // spin
+        const spin = (Math.sin(c.t * 3) * 0.35) + 1;
+        const rX = c.r * spin;
+        const rY = c.r;
+
+        const coinGrad = ctx.createRadialGradient(c.x - 3, c.y - 4, 2, c.x, c.y, rY + 2);
+        coinGrad.addColorStop(0, "#fff9d6");
+        coinGrad.addColorStop(0.4, "#ffd447");
+        coinGrad.addColorStop(1, "#c97a1a");
+        ctx.fillStyle = coinGrad;
+        ctx.beginPath();
+        ctx.ellipse(c.x, c.y, rX, rY, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = "rgba(255,216,140,0.9)";
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.ellipse(c.x, c.y, rX - 2, rY - 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.ellipse(c.x - 1, c.y - 3, rX / 2.3, rY / 2, 0, Math.PI * 1.2, Math.PI * 1.7);
+        ctx.stroke();
+
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.fillRect(c.x - 1.5, c.y - rY / 1.8, 3, rY * 1.3);
+      }
+    }
+
+    function drawParticles() {
+      for (let p of particles) {
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.c;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawHomeScreen() {
+      ctx.fillStyle = "rgba(5,16,24,0.4)";
+      ctx.beginPath();
+      ctx.roundRect(37, 110, 286, 305, 20);
+      ctx.fill();
+
+      const grad = ctx.createLinearGradient(37, 110, 323, 415);
+      grad.addColorStop(0, "#fff");
+      grad.addColorStop(0.5, "#d8f3ff");
+      grad.addColorStop(1, "#88d9ff");
+      ctx.fillStyle = grad;
+      ctx.font = "bold 30px system-ui, sans-serif";
+      ctx.fillText("Flappy-ish", 105, 158);
+      ctx.font = "600 17px system-ui, sans-serif";
+      ctx.fillText("Day/Night Edition", 118, 186);
+
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText("Score 5 pts to change the lighting.", 80, 213);
+      ctx.fillText("Collect coins. Buy birds.", 122, 232);
+
+      // buttons
+      drawPrimaryButton(playBtn.x, playBtn.y, playBtn.w, playBtn.h, "Play");
+      drawStoreButton(storeBtn.x, storeBtn.y, storeBtn.w, storeBtn.h);
+
+      // best + coins
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("Best score: " + best, 120, storeBtn.y + 80);
+
+      drawCoinHudSmall(120, storeBtn.y + 100, totalCoins);
+
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
+      ctx.fillText("Tap or Space to start", 120, storeBtn.y + 122);
+    }
+
+    function drawPrimaryButton(x,y,w,h,label) {
+      const btnGrad = ctx.createLinearGradient(x, y, x + w, y + h);
+      btnGrad.addColorStop(0, "#38bdf8");
+      btnGrad.addColorStop(1, "#0ea5e9");
+      ctx.fillStyle = btnGrad;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 12);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
+      ctx.fillStyle = "#fff";
+      ctx.font = "600 18px system-ui, sans-serif";
+      ctx.fillText(label, x + (w - ctx.measureText(label).width)/2, y + 36);
+    }
+
+    function drawStoreButton(x,y,w,h) {
+      const btnGrad = ctx.createLinearGradient(x, y, x + w, y + h);
+      btnGrad.addColorStop(0, "#f97316");
+      btnGrad.addColorStop(1, "#ea580c");
+      ctx.fillStyle = btnGrad;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 12);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + 3, y + 3, w - 6, h - 6);
+
+      // cart icon
+      drawCartIcon(x + 14, y + 16, 20, 20);
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "600 15px system-ui, sans-serif";
+      ctx.fillText("Store", x + 46, y + 34);
+    }
+
+    function drawCartIcon(x, y, w, h) {
+      ctx.save();
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 3, y + h);
+      ctx.lineTo(x + w - 4, y + h);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + 4, y + 4);
+      ctx.lineTo(x + w - 4, y + 4);
+      ctx.lineTo(x + w - 6, y + h - 6);
+      ctx.lineTo(x + 6, y + h - 6);
+      ctx.closePath();
+      ctx.stroke();
+
+      // wheels
+      ctx.beginPath();
+      ctx.arc(x + 7, y + h + 1, 2.2, 0, Math.PI * 2);
+      ctx.arc(x + w - 9, y + h + 1, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawCoinHudSmall(x, y, value) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      const g = ctx.createRadialGradient(x, y, 0, x, y, 16);
+      g.addColorStop(0, "rgba(255,214,120,1)");
+      g.addColorStop(1, "rgba(255,214,120,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      const r = 10;
+      const grad = ctx.createRadialGradient(x - 2, y - 3, 2, x, y, r);
+      grad.addColorStop(0, "#fff6d1");
+      grad.addColorStop(0.5, "#ffd447");
+      grad.addColorStop(1, "#d88b1a");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.7)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("x " + value, x + 16, y + 4);
+    }
+
+    function drawStoreScreen() {
+      // panel
+      ctx.fillStyle = "rgba(4,9,16,0.65)";
+      ctx.beginPath();
+      ctx.roundRect(22, 50, 316, 430, 20);
+      ctx.fill();
+
+      // header
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 20px system-ui, sans-serif";
+      ctx.fillText("Store", 42, 82);
+
+      // coins top right
+      drawCoinHudSmall(310, 78, totalCoins);
+
+      // back button
+      ctx.fillStyle = "rgba(15,118,178,0.85)";
+      ctx.beginPath();
+      ctx.roundRect(24, 24, 70, 32, 10);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText("← Back", 34, 45);
+
+      // cards
+      const startX = 30;
+      const startY = 110;
+      const cardW = 140;
+      const cardH = 140;
+      const gapX = 15;
+      for (let i = 0; i < CHARACTERS.length; i++) {
+        const ch = CHARACTERS[i];
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const cx = startX + col * (cardW + gapX);
+        const cy = startY + row * (cardH + 14);
+
+        // card
+        ctx.fillStyle = "rgba(255,255,255,0.04)";
+        ctx.beginPath();
+        ctx.roundRect(cx, cy, cardW, cardH, 14);
+        ctx.fill();
+        ctx.strokeStyle = ch.id === selectedChar ? "rgba(56,189,248,0.9)" : "rgba(255,255,255,0.03)";
+        ctx.lineWidth = ch.id === selectedChar ? 2 : 1;
+        ctx.strokeRect(cx, cy, cardW, cardH);
+
+        // bird preview
+        drawCharacterPreview(ch, cx + cardW/2, cy + 55);
+
+        // name
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 12px system-ui, sans-serif";
+        const nameW = ctx.measureText(ch.name).width;
+        ctx.fillText(ch.name, cx + (cardW - nameW)/2, cy + 100);
+
+        // price / owned
+        if (ch.owned) {
+          ctx.fillStyle = "rgba(34,197,94,0.8)";
+          ctx.font = "11px system-ui, sans-serif";
+          ctx.fillText("Owned", cx + 50, cy + 118);
+        } else {
+          drawCoinHudSmall(cx + 32, cy + 116, ch.price);
+          ctx.fillStyle = "rgba(255,255,255,0.6)";
+          ctx.font = "10px system-ui, sans-serif";
+          ctx.fillText("Tap to buy", cx + 70, cy + 120);
+        }
+
+        // selected tag
+        if (ch.id === selectedChar) {
+          ctx.fillStyle = "rgba(56,189,248,0.8)";
+          ctx.beginPath();
+          ctx.roundRect(cx + 32, cy + 126, 76, 16, 8);
+          ctx.fill();
+          ctx.fillStyle = "#fff";
+          ctx.font = "10px system-ui, sans-serif";
+          ctx.fillText("Selected", cx + 46, cy + 137);
+        }
+      }
+    }
+
+    function drawCharacterPreview(ch, x, y) {
+      // just draw bird with that skin
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(0.9, 0.9);
+
+      let base1, base2, wingCol, cheekCol, beakCol;
+      if (ch.id === "default") {
+        base1 = [255,217,102];
+        base2 = [255,174,0];
+        wingCol = [255,233,168];
+        cheekCol = [255,120,120];
+        beakCol = [255,123,26];
+      } else if (ch.id === "red") {
+        base1 = [255,120,120];
+        base2 = [232,46,46];
+        wingCol = [255,214,214];
+        cheekCol = [255,210,210];
+        beakCol = [255,131,60];
+      } else {
+        base1 = [187,210,255];
+        base2 = [60,73,108];
+        wingCol = [207,219,255];
+        cheekCol = [142,162,206];
+        beakCol = [255,206,116];
+      }
+
+      const grd = ctx.createLinearGradient(-12, -16, 24, 16);
+      grd.addColorStop(0, `rgb(${base1[0]},${base1[1]},${base1[2]})`);
+      grd.addColorStop(1, `rgb(${base2[0]},${base2[1]},${base2[2]})`);
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgb(${wingCol[0]},${wingCol[1]},${wingCol[2]})`;
+      ctx.beginPath();
+      ctx.roundRect(-10, 0, 20, 10, 6);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(9, -6, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(11, -6, 2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgb(${cheekCol[0]},${cheekCol[1]},${cheekCol[2]})`;
+      ctx.beginPath();
+      ctx.arc(-3, 4, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = `rgb(${beakCol[0]},${beakCol[1]},${beakCol[2]})`;
+      ctx.beginPath();
+      ctx.moveTo(18, -2);
+      ctx.lineTo(30, 2);
+      ctx.lineTo(18, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawHUD() {
+      ctx.fillStyle = `rgba(0,0,0,${0.35 + 0.1 * themeLerp})`;
+      ctx.beginPath();
+      ctx.roundRect(10, 10, 215, 66, 10);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 26px system-ui, sans-serif";
+      ctx.fillText(score.toString(), 22, 40);
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText("Best: " + best, 22, 54);
+      ctx.fillText("Theme every 5 pts (faded)", 90, 26);
+      ctx.fillText("Easy mode", 90, 54);
+
+      drawCoinHudSmall(canvas.width - 90, 25, totalCoins);
+    }
+
+    function drawGameOver() {
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const cardW = 250, cardH = 210;
+      const cx = (canvas.width - cardW)/2;
+      const cy = (canvas.height - cardH)/2;
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.beginPath();
+      ctx.roundRect(cx, cy, cardW, cardH, 16);
+      ctx.fill();
+
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "bold 24px system-ui, sans-serif";
+      ctx.fillText("You crashed", cx + 54, cy + 38);
+      ctx.fillStyle = "#334155";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText("Score: " + score, cx + 28, cy + 72);
+      ctx.fillText("Best: " + best, cx + 28, cy + 94);
+      ctx.fillText("Coins (saved): " + totalCoins, cx + 28, cy + 118);
+
+      const bh = 44, bw = cardW - 50;
+      const bx = cx + 25, by = cy + 136;
+      const btnGrad = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+      btnGrad.addColorStop(0, "#38bdf8");
+      btnGrad.addColorStop(1, "#0ea5e9");
+      ctx.fillStyle = btnGrad;
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 10);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.fillText("Back to home (click/tap)", bx + 22, by + 28);
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = now - last;
+      last = now;
+      update(dt, now);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawBackground();
+      drawPipes();
+      drawGround();
+      drawCoins();
+      drawParticles();
+      drawBird();
+
+      if (gameState === "home") {
+        drawHomeScreen();
+      } else if (gameState === "playing") {
+        drawHUD();
+      } else if (gameState === "gameover") {
+        drawHUD();
+        drawGameOver();
+      } else if (gameState === "store") {
+        drawStoreScreen();
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    resetGame(true);
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
