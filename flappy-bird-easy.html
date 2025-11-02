@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Flappy-ish Bird v4 (Easier)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #051724;
+      display: flex;
+      height: 100vh;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #gameWrap {
+      position: relative;
+      box-shadow: 0 22px 40px rgba(0,0,0,0.45);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    canvas {
+      border-radius: 16px;
+      background: #7ed0ff;
+    }
+    #msg {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      padding: 6px 10px;
+      background: rgba(0,0,0,0.45);
+      color: #fff;
+      font-size: 14px;
+      border-radius: 6px;
+      backdrop-filter: blur(4px);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameWrap">
+    <canvas id="game" width="360" height="540"></canvas>
+    <div id="msg">Easier mode: bigger gaps, slower pipes, forgiving hitbox.</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    // easier constants
+    const GRAVITY = 0.29;       // was 0.35
+    const FLAP = -6.5;          // slightly stronger
+    const PIPE_GAP = 160;       // was 130
+    const PIPE_WIDTH = 64;
+    const PIPE_INTERVAL = 1650; // more time between pipes
+    const FLOOR_HEIGHT = 76;
+    const SCROLL_SPEED = 1.8;   // slower pipes
+    const HITBOX_SHRINK = 0.7;  // hitbox 70% of bird radius
+
+    let bird, pipes, lastPipeTime, score, best, gameOver, started, bgClouds, groundOffset;
+    best = 0;
+
+    function resetGame() {
+      bird = {
+        x: 78,
+        y: canvas.height / 2,
+        vy: 0,
+        r: 16,
+        anim: 0
+      };
+      pipes = [];
+      lastPipeTime = performance.now();
+      score = 0;
+      gameOver = false;
+      started = false;
+      groundOffset = 0;
+      initClouds();
+    }
+
+    function getTheme() {
+      const phase = Math.floor(score / 15) % 2;
+      return phase === 0 ? "day" : "night";
+    }
+
+    function initClouds() {
+      bgClouds = [];
+      for (let i = 0; i < 6; i++) {
+        bgClouds.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * 180 + 20,
+          w: Math.random() * 60 + 40,
+          h: Math.random() * 18 + 10,
+          s: Math.random() * 0.5 + 0.15
+        });
+      }
+    }
+
+    function spawnPipe() {
+      const maxTop = canvas.height - FLOOR_HEIGHT - 100;
+      const minTop = 60;
+      const topHeight = Math.floor(Math.random() * (maxTop - minTop) + minTop);
+      pipes.push({
+        x: canvas.width,
+        top: topHeight,
+        passed: false
+      });
+    }
+
+    function flap() {
+      if (!started) started = true;
+      if (gameOver) {
+        resetGame();
+        return;
+      }
+      bird.vy = FLAP;
+    }
+
+    canvas.addEventListener("mousedown", flap);
+    canvas.addEventListener("touchstart", function(e){
+      e.preventDefault();
+      flap();
+    }, {passive:false});
+    document.addEventListener("keydown", e => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        flap();
+      }
+      if (e.code === "KeyR") {
+        resetGame();
+      }
+    });
+
+    function update(dt, now) {
+      if (!started || gameOver) {
+        moveClouds(dt);
+        return;
+      }
+
+      bird.vy += GRAVITY;
+      bird.y += bird.vy;
+      bird.anim += dt * 0.01;
+
+      if (now - lastPipeTime > PIPE_INTERVAL) {
+        spawnPipe();
+        lastPipeTime = now;
+      }
+
+      for (let i = 0; i < pipes.length; i++) {
+        pipes[i].x -= SCROLL_SPEED;
+      }
+      pipes = pipes.filter(p => p.x + PIPE_WIDTH > -10);
+
+      moveClouds(dt);
+      groundOffset -= SCROLL_SPEED;
+      if (groundOffset <= -72) groundOffset = 0;
+
+      const bx = bird.x;
+      const by = bird.y;
+      const hitR = bird.r * HITBOX_SHRINK;
+
+      for (let i = 0; i < pipes.length; i++) {
+        const p = pipes[i];
+        const inX = bx + hitR > p.x && bx - hitR < p.x + PIPE_WIDTH;
+        const gapTop = p.top;
+        const gapBottom = p.top + PIPE_GAP;
+        if (inX) {
+          // extra forgiveness: small 4px padding in gap
+          const pad = 4;
+          if (by - hitR < gapTop - pad || by + hitR > gapBottom + pad) {
+            die();
+          }
+        }
+        if (!p.passed && p.x + PIPE_WIDTH < bx) {
+          p.passed = true;
+          score++;
+          if (score > best) best = score;
+        }
+      }
+
+      if (by + hitR > canvas.height - FLOOR_HEIGHT || by - hitR < 0) {
+        die();
+      }
+    }
+
+    function moveClouds(dt) {
+      for (let c of bgClouds) {
+        c.x -= c.s;
+        if (c.x + c.w < -10) {
+          c.x = canvas.width + 30;
+          c.y = Math.random() * 180 + 20;
+        }
+      }
+    }
+
+    function die() {
+      gameOver = true;
+    }
+
+    function drawBackground(theme) {
+      if (theme === "day") {
+        const g = ctx.createLinearGradient(0,0,0,canvas.height);
+        g.addColorStop(0, "#7ed0ff");
+        g.addColorStop(0.6, "#c9efff");
+        g.addColorStop(1, "#fdf0d5");
+        ctx.fillStyle = g;
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+      } else {
+        const g = ctx.createLinearGradient(0,0,0,canvas.height);
+        g.addColorStop(0, "#071928");
+        g.addColorStop(0.4, "#0d3047");
+        g.addColorStop(1, "#202c3a");
+        ctx.fillStyle = g;
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        for (let i = 0; i < 25; i++) {
+          const x = (i * 14 + (score*3)) % canvas.width;
+          const y = (i * 19) % 160;
+          ctx.fillRect(x, y, 2, 2);
+        }
+
+        ctx.fillStyle = "rgba(255,255,255,0.83)";
+        ctx.beginPath();
+        ctx.arc(54, 64, 20, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(7,25,40,0.5)";
+        ctx.beginPath();
+        ctx.arc(64, 58, 20, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (let c of bgClouds) {
+        if (theme === "day") {
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+        } else {
+          ctx.fillStyle = "rgba(230,236,255,0.15)";
+        }
+        ctx.beginPath();
+        ctx.roundRect(c.x, c.y, c.w, c.h, 12);
+        ctx.fill();
+      }
+    }
+
+    function drawPipes(theme) {
+      pipes.forEach(p => {
+        let grad;
+        if (theme === "day") {
+          grad = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+          grad.addColorStop(0, "#2e9f45");
+          grad.addColorStop(0.5, "#3ecf5b");
+          grad.addColorStop(1, "#2b7f3b");
+        } else {
+          grad = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+          grad.addColorStop(0, "#2b3a55");
+          grad.addColorStop(0.5, "#3d5374");
+          grad.addColorStop(1, "#1f2837");
+        }
+        ctx.fillStyle = grad;
+
+        ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+        ctx.fillStyle = theme === "day" ? "#d9ffd4" : "rgba(230,236,255,0.45)";
+        ctx.fillRect(p.x - 3, p.top - 16, PIPE_WIDTH + 6, 16);
+
+        const bottomH = canvas.height - FLOOR_HEIGHT - (p.top + PIPE_GAP);
+        ctx.fillStyle = grad;
+        ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
+        ctx.fillStyle = theme === "day" ? "#d9ffd4" : "rgba(230,236,255,0.45)";
+        ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+      });
+    }
+
+    function drawGround(theme) {
+      if (theme === "day") {
+        ctx.fillStyle = "#d4aa63";
+      } else {
+        ctx.fillStyle = "#2f2b32";
+      }
+      ctx.fillRect(0, canvas.height - FLOOR_HEIGHT, canvas.width, FLOOR_HEIGHT);
+      ctx.fillStyle = theme === "day" ? "#63b840" : "#3f5f48";
+      ctx.fillRect(0, canvas.height - FLOOR_HEIGHT, canvas.width, 14);
+
+      ctx.fillStyle = theme === "day" ? "rgba(0,0,0,0.1)" : "rgba(255,255,255,0.04)";
+      for (let x = groundOffset; x < canvas.width + 72; x += 72) {
+        ctx.fillRect(x, canvas.height - FLOOR_HEIGHT + 16, 48, 14);
+      }
+    }
+
+    function drawBird(theme) {
+      ctx.save();
+      ctx.translate(bird.x, bird.y);
+      const tilt = Math.min(Math.max(bird.vy / 10, -0.45), 0.6);
+      ctx.rotate(tilt);
+
+      let grd;
+      if (theme === "day") {
+        grd = ctx.createLinearGradient(-12, -16, 24, 16);
+        grd.addColorStop(0, "#ffd966");
+        grd.addColorStop(1, "#ffae00");
+      } else {
+        grd = ctx.createLinearGradient(-12, -16, 24, 16);
+        grd.addColorStop(0, "#ffe2a8");
+        grd.addColorStop(1, "#ffc14e");
+      }
+      ctx.fillStyle = grd;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const wingOffset = Math.sin(bird.anim * 8) * 4;
+      ctx.save();
+      ctx.translate(-6, 4 + wingOffset);
+      ctx.fillStyle = theme === "day" ? "#ffe9a8" : "#fff4d8";
+      ctx.beginPath();
+      ctx.roundRect(-10, -6, 20, 12, 6);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(9, -6, 5.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = theme === "day" ? "#000" : "#0f172a";
+      ctx.beginPath();
+      ctx.arc(11, -6, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = theme === "day" ? "rgba(255,120,120,0.7)" : "rgba(255,196,196,0.5)";
+      ctx.beginPath();
+      ctx.arc(-3, 4, 3.6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = theme === "day" ? "#ff7b1a" : "#ff9c46";
+      ctx.beginPath();
+      ctx.moveTo(18, -2);
+      ctx.lineTo(30, 2);
+      ctx.lineTo(18, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawHUD(theme) {
+      ctx.fillStyle = theme === "day" ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.35)";
+      ctx.beginPath();
+      ctx.roundRect(10, 10, 160, 58, 10);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 26px system-ui, sans-serif";
+      ctx.fillText(score.toString(), 22, 40);
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText("Best: " + best, 22, 54);
+      ctx.fillText("Theme: " + getTheme(), 80, 54);
+      ctx.fillText("Easy mode", 80, 25);
+
+      if (!started) {
+        ctx.fillStyle = "rgba(0,0,0,0.4)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 26px system-ui, sans-serif";
+        ctx.fillText("Flappy-ish Bird (Easy)", 40, 200);
+        ctx.font = "14px system-ui, sans-serif";
+        ctx.fillText("Tap/click/space to start", 80, 232);
+        ctx.fillText("Bigger gaps. Smaller hitbox.", 70, 256);
+      }
+
+      if (gameOver) {
+        ctx.fillStyle = "rgba(0,0,0,0.58)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const cardW = 250, cardH = 180;
+        const cx = (canvas.width - cardW)/2;
+        const cy = (canvas.height - cardH)/2;
+        ctx.fillStyle = "rgba(255,255,255,0.96)";
+        ctx.beginPath();
+        ctx.roundRect(cx, cy, cardW, cardH, 16);
+        ctx.fill();
+
+        ctx.fillStyle = "#333";
+        ctx.font = "bold 24px system-ui, sans-serif";
+        ctx.fillText("Game Over", cx + 46, cy + 40);
+
+        ctx.font = "15px system-ui, sans-serif";
+        ctx.fillText("Score: " + score, cx + 26, cy + 80);
+        ctx.fillText("Best: " + best, cx + 26, cy + 104);
+
+        ctx.fillStyle = "#0ea5e9";
+        ctx.beginPath();
+        ctx.roundRect(cx + 30, cy + 122, cardW - 60, 40, 10);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "14px system-ui, sans-serif";
+        ctx.fillText("Click or press R to restart", cx + 40, cy + 148);
+      }
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = now - last;
+      last = now;
+      update(dt, now);
+
+      const theme = getTheme();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawBackground(theme);
+      drawPipes(theme);
+      drawGround(theme);
+      drawBird(theme);
+      drawHUD(theme);
+
+      requestAnimationFrame(loop);
+    }
+
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
