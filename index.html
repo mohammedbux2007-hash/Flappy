@@ -1,134 +1,197 @@
+You want everything in one file, working, no squish, store, skeleton → tombstones, plus music that actually switches. Here. This is the whole thing.
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Flappy Bird+</title>
+  <title>Flappy Bird+ (Responsive, Store, Music)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="mobile-web-app-capable" content="yes" />
   <style>
     html, body {
       margin: 0;
       height: 100%;
       background: #020617;
+      overflow: hidden;
       touch-action: none;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      overflow: hidden;
-    }
-    #wrap {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
     }
     canvas {
-      position: absolute;
-      inset: 0;
       width: 100%;
       height: 100%;
       display: block;
-      background: #111827;
+      background: #020617;
     }
   </style>
 </head>
 <body>
-  <div id="wrap">
-    <canvas id="game"></canvas>
-  </div>
+  <canvas id="game"></canvas>
+
+  <!-- cheerful track -->
+  <audio id="joy" loop preload="auto">
+    <!-- replace with your own, this is just a public free sample -->
+    <source src="https://cdn.pixabay.com/download/audio/2022/03/15/audio_d332a4a66c.mp3?filename=happy-day-113985.mp3" type="audio/mpeg">
+  </audio>
+  <!-- spooky track -->
+  <audio id="spooky" loop preload="auto">
+    <source src="https://cdn.pixabay.com/download/audio/2023/02/21/audio_8a7b326dc9.mp3?filename=halloween-ambient-141684.mp3" type="audio/mpeg">
+  </audio>
 
   <script>
+    // ============================================================
+    // 0. CANVAS & NO-DISTORTION SETUP
+    // ============================================================
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
 
+    // fixed game world
+    const GAME_W = 720;
+    const GAME_H = 1280;
+
+    let screenW = 0, screenH = 0, dpr = 1;
+    let scale = 1, offsetX = 0, offsetY = 0;
+
     function resize() {
-      const dpr = window.devicePixelRatio || 1;
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      dpr = window.devicePixelRatio || 1;
+      screenW = window.innerWidth;
+      screenH = window.innerHeight;
+      canvas.width = screenW * dpr;
+      canvas.height = screenH * dpr;
+
+      const scaleX = screenW / GAME_W;
+      const scaleY = screenH / GAME_H;
+      scale = Math.min(scaleX, scaleY);
+      offsetX = (screenW - GAME_W * scale) / 2;
+      offsetY = (screenH - GAME_H * scale) / 2;
     }
     window.addEventListener("resize", resize);
     resize();
 
-    // GAME STATE
-    let gameState = "home";
+    // helpers to map pointer to game coords
+    function toGame(x, y) {
+      return {
+        x: (x - offsetX) / scale,
+        y: (y - offsetY) / scale
+      };
+    }
 
-    // CONSTANTS
+    // safe rounded rect
+    function roundRect(ctx, x, y, w, h, r) {
+      r = Math.min(r, w/2, h/2);
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    // ============================================================
+    // 1. GAME STATE & CONSTANTS
+    // ============================================================
+    let gameState = "home"; // home | playing | store | gameover
+
     const GRAVITY = 0.29;
     const FLAP = -6.5;
     const PIPE_GAP_RATIO = 0.3;
-    const PIPE_WIDTH_RATIO = 0.17;
+    const PIPE_WIDTH_RATIO = 0.16;
     const FLOOR_RATIO = 0.14;
-    const SPEED_RATIO = 0.35;
+    const SPEED_RATIO = 0.38;
     const PIPE_INTERVAL = 1650;
     const HITBOX_FACTOR = 0.7;
     const COIN_CHANCE = 0.55;
-    const THEME_LERP_SPEED = 0.08;
+    const THEME_LERP_SPEED = 0.1;
 
-    // RUNTIME
     let bird, pipes, coins, particles, bgClouds;
     let lastPipeTime = 0;
     let score = 0, best = 0;
     let groundOffset = 0;
-    let theme = 0;       // 0 normal, 1 graveyard
+    let theme = 0;       // 0 = normal, 1 = graveyard
     let targetTheme = 0;
 
-    // CHARACTERS
+    // store stuff
     const CHARACTERS = [
       { id: "default",  name: "Sunny Bird",   price: 0 },
       { id: "red",      name: "Red Blaze",    price: 30 },
       { id: "shadow",   name: "Shadow Wing",  price: 60 },
       { id: "skeleton", name: "Skeleton Bird",price: 100 },
     ];
-
     let ownedChars = new Set(["default"]);
     let selectedChar = "default";
     let totalCoins = 0;
 
-    // LOAD SAVE
+    // audio
+    const joy = document.getElementById("joy");
+    const spooky = document.getElementById("spooky");
+    let musicStarted = false;
+
+    // load saves
     try {
-      const savedCoins = localStorage.getItem("fb-coins");
-      if (savedCoins) totalCoins = parseInt(savedCoins, 10) || 0;
-      const savedOwned = localStorage.getItem("fb-owned");
-      if (savedOwned) ownedChars = new Set(JSON.parse(savedOwned));
-      const savedSel = localStorage.getItem("fb-selected");
-      if (savedSel) selectedChar = savedSel;
-    } catch(e){}
+      const c = localStorage.getItem("fb-coins2");
+      if (c) totalCoins = parseInt(c, 10) || 0;
+      const o = localStorage.getItem("fb-owned2");
+      if (o) ownedChars = new Set(JSON.parse(o));
+      const s = localStorage.getItem("fb-selected2");
+      if (s) selectedChar = s;
+    } catch (e) {}
 
     function saveProgress() {
       try {
-        localStorage.setItem("fb-coins", totalCoins.toString());
-        localStorage.setItem("fb-owned", JSON.stringify(Array.from(ownedChars)));
-        localStorage.setItem("fb-selected", selectedChar);
-      } catch(e){}
+        localStorage.setItem("fb-coins2", totalCoins.toString());
+        localStorage.setItem("fb-owned2", JSON.stringify(Array.from(ownedChars)));
+        localStorage.setItem("fb-selected2", selectedChar);
+      } catch (e) {}
     }
 
-    function getSize() {
-      return { W: canvas.clientWidth, H: canvas.clientHeight };
+    function isSkeleton() {
+      return selectedChar === "skeleton";
     }
 
+    function startMusicIfNeeded() {
+      if (musicStarted) return;
+      musicStarted = true;
+      playMusicForCurrentBird();
+    }
+
+    function playMusicForCurrentBird() {
+      if (!musicStarted) return;
+      if (isSkeleton()) {
+        joy.pause();
+        spooky.currentTime = 0;
+        spooky.play().catch(()=>{});
+      } else {
+        spooky.pause();
+        joy.currentTime = 0;
+        joy.play().catch(()=>{});
+      }
+    }
+
+    // ============================================================
+    // 2. INIT
+    // ============================================================
     function initClouds() {
-      const {W,H} = getSize();
       bgClouds = [];
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 6; i++) {
         bgClouds.push({
-          x: Math.random()*W,
-          y: Math.random()*(H*0.3)+H*0.02,
-          w: Math.random()*(W*0.14)+(W*0.1),
-          h: Math.random()*(H*0.025)+(H*0.02),
-          s: Math.random()*0.45+0.15
+          x: Math.random()*GAME_W,
+          y: Math.random()*(GAME_H*0.3)+GAME_H*0.02,
+          w: Math.random()*(GAME_W*0.15)+(GAME_W*0.1),
+          h: Math.random()*(GAME_H*0.025)+(GAME_H*0.02),
+          s: Math.random()*0.5+0.2
         });
       }
     }
 
     function resetGame(full=true) {
-      const {W,H} = getSize();
       bird = {
-        x: W*0.22,
-        y: H*0.45,
+        x: GAME_W*0.22,
+        y: GAME_H*0.45,
         vy: 0,
-        r: Math.min(W,H) * 0.045,
+        r: Math.min(GAME_W,GAME_H)*0.045,
         anim: 0
       };
       pipes = [];
@@ -141,29 +204,46 @@
       if (full) gameState = "home";
     }
 
-    function isSkeleton() {
-      return selectedChar === "skeleton";
-    }
+    resetGame(true);
 
-    // INPUT
-    canvas.addEventListener("mousedown", onPointer);
-    canvas.addEventListener("touchstart", e => { e.preventDefault(); onPointer(e.touches[0]); }, {passive:false});
+    // ============================================================
+    // 3. INPUT
+    // ============================================================
+    canvas.addEventListener("mousedown", e => {
+      startMusicIfNeeded();
+      handlePointer(e.clientX, e.clientY);
+    });
+    canvas.addEventListener("touchstart", e => {
+      e.preventDefault();
+      startMusicIfNeeded();
+      const t = e.touches[0];
+      handlePointer(t.clientX, t.clientY);
+    }, {passive:false});
+
     document.addEventListener("keydown", e => {
-      if (e.code === "Space" || e.code === "ArrowUp") flap();
-      if (e.code === "Escape" && gameState === "store") gameState = "home";
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        startMusicIfNeeded();
+        if (gameState === "playing") {
+          bird.vy = FLAP;
+        } else if (gameState === "home") {
+          startPlay();
+        } else if (gameState === "gameover") {
+          resetGame(true);
+        }
+      }
+      if (e.code === "Escape" && gameState === "store") {
+        gameState = "home";
+      }
     });
 
-    function onPointer(e) {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const {W,H} = getSize();
+    function handlePointer(cx, cy) {
+      const {x, y} = toGame(cx, cy);
 
       if (gameState === "home") {
-        const playBtn = getPlayBtn(W,H);
-        const storeBtn = getStoreBtn(W,H);
-        if (inRect(x,y,playBtn)) { startPlay(); return; }
-        if (inRect(x,y,storeBtn)) { gameState = "store"; return; }
+        const pb = getPlayBtn();
+        const sb = getStoreBtn();
+        if (inRect(x,y,pb)) { startPlay(); return; }
+        if (inRect(x,y,sb)) { gameState = "store"; return; }
         return;
       }
 
@@ -177,11 +257,7 @@
         return;
       }
 
-      flap();
-    }
-
-    function flap() {
-      if (gameState !== "playing") return;
+      // playing
       bird.vy = FLAP;
     }
 
@@ -195,65 +271,67 @@
       lastPipeTime = performance.now();
     }
 
-    // STORE
-    function handleStoreClick(mx,my) {
-      const {W,H} = getSize();
-      const backBtn = { x: W*0.05, y: H*0.045, w: W*0.2, h: H*0.06 };
-      if (inRect(mx,my,backBtn)) {
+    // ============================================================
+    // 4. STORE
+    // ============================================================
+    function handleStoreClick(x,y) {
+      const back = { x: GAME_W*0.05, y: GAME_H*0.045, w: GAME_W*0.22, h: GAME_H*0.055 };
+      if (inRect(x,y,back)) {
         gameState = "home";
         return;
       }
 
-      const startX = W*0.08;
-      const startY = H*0.16;
-      const cardW = W*0.36;
-      const cardH = H*0.19;
-      const gapX = W*0.04;
+      const startX = GAME_W*0.08;
+      const startY = GAME_H*0.16;
+      const cardW  = GAME_W*0.38;
+      const cardH  = GAME_H*0.19;
+      const gapX   = GAME_W*0.04;
 
       for (let i = 0; i < CHARACTERS.length; i++) {
         const ch = CHARACTERS[i];
         const col = i % 2;
         const row = Math.floor(i / 2);
         const cx = startX + col*(cardW+gapX);
-        const cy = startY + row*(cardH + H*0.025);
-        if (inRect(mx,my,{x:cx,y:cy,w:cardW,h:cardH})) {
+        const cy = startY + row*(cardH + GAME_H*0.03);
+        if (inRect(x,y,{x:cx,y:cy,w:cardW,h:cardH})) {
           if (ownedChars.has(ch.id)) {
             selectedChar = ch.id;
             saveProgress();
-          } else {
-            if (totalCoins >= ch.price) {
-              totalCoins -= ch.price;
-              ownedChars.add(ch.id);
-              selectedChar = ch.id;
-              saveProgress();
-            }
+            playMusicForCurrentBird();
+          } else if (totalCoins >= ch.price) {
+            totalCoins -= ch.price;
+            ownedChars.add(ch.id);
+            selectedChar = ch.id;
+            saveProgress();
+            playMusicForCurrentBird();
           }
           return;
         }
       }
     }
 
-    // GAME UPDATE
+    // ============================================================
+    // 5. GAME UPDATE
+    // ============================================================
     function spawnPipe() {
-      const {W,H} = getSize();
-      const floorH = H * FLOOR_RATIO;
-      const gap = H * PIPE_GAP_RATIO;
-      const pipeW = W * PIPE_WIDTH_RATIO;
-      const minTop = H * 0.06;
-      const maxTop = H - floorH - gap - H*0.12;
+      const floorH = GAME_H * FLOOR_RATIO;
+      const gap = GAME_H * PIPE_GAP_RATIO;
+      const pipeW = GAME_W * PIPE_WIDTH_RATIO;
+      const minTop = GAME_H * 0.06;
+      const maxTop = GAME_H - floorH - gap - GAME_H*0.12;
       const top = Math.random()*(maxTop-minTop) + minTop;
 
       pipes.push({
-        x: W,
+        x: GAME_W,
         top,
         passed: false
       });
 
       if (Math.random() < COIN_CHANCE) {
         coins.push({
-          x: W + pipeW * 0.5,
+          x: GAME_W + pipeW*0.5,
           y: top + gap/2,
-          r: Math.min(W,H)*0.03,
+          r: Math.min(GAME_W,GAME_H)*0.03,
           t: Math.random()*Math.PI*2,
           collected: false
         });
@@ -273,7 +351,6 @@
     }
 
     function update(dt, now) {
-      // theme target
       targetTheme = isSkeleton() ? 1 : 0;
       theme += (targetTheme - theme) * THEME_LERP_SPEED;
 
@@ -287,28 +364,28 @@
       particles = particles.filter(p => p.life > 0);
 
       // clouds
-      moveClouds(dt);
+      for (let c of bgClouds) {
+        c.x -= c.s;
+        if (c.x + c.w < -20) c.x = GAME_W + 30;
+      }
 
       if (gameState !== "playing") {
-        // idle bird hover
         if (gameState === "home" || gameState === "store") {
-          const {H} = getSize();
-          bird.y = H*0.42 + Math.sin(now*0.004)*8;
+          bird.y = GAME_H*0.42 + Math.sin(now*0.004)*10;
         }
         return;
       }
 
+      // physics
       bird.vy += GRAVITY;
       bird.y += bird.vy;
       bird.anim += dt*0.012;
 
-      const {W,H} = getSize();
-      const floorH = H * FLOOR_RATIO;
-      const gap = H * PIPE_GAP_RATIO;
-      const pipeW = W * PIPE_WIDTH_RATIO;
-      const scroll = (SPEED_RATIO * W) * (dt/1000);
+      const floorH = GAME_H * FLOOR_RATIO;
+      const gap = GAME_H * PIPE_GAP_RATIO;
+      const pipeW = GAME_W * PIPE_WIDTH_RATIO;
+      const scroll = (SPEED_RATIO * GAME_W) * (dt/1000);
 
-      // spawn pipes
       if (now - lastPipeTime > PIPE_INTERVAL) {
         spawnPipe();
         lastPipeTime = now;
@@ -316,18 +393,18 @@
 
       // move pipes
       for (let p of pipes) p.x -= scroll;
-      pipes = pipes.filter(p => p.x + pipeW > -30);
+      pipes = pipes.filter(p => p.x + pipeW > -40);
 
       // move coins
       for (let c of coins) {
         c.x -= scroll;
         c.t += dt*0.008;
       }
-      coins = coins.filter(c => !c.collected && c.x + c.r > -30);
+      coins = coins.filter(c => !c.collected && c.x + c.r > -40);
 
       // ground
       groundOffset -= scroll;
-      if (groundOffset < -W*0.25) groundOffset = 0;
+      if (groundOffset < -GAME_W*0.25) groundOffset = 0;
 
       // collisions
       const bx = bird.x;
@@ -339,43 +416,33 @@
         const dx = bx - c.x;
         const dy = by - c.y;
         const dist = Math.sqrt(dx*dx + dy*dy);
-        if (dist < br + c.r*0.8) {
+        if (dist < br + c.r*0.75) {
           c.collected = true;
-          totalCoins += 1;
+          totalCoins++;
           spawnCoinParticles(c.x, c.y);
           saveProgress();
         }
       }
 
+      // pipes
       for (let p of pipes) {
         const inX = bx + br > p.x && bx - br < p.x + pipeW;
         if (inX) {
           const topGap = p.top;
           const bottomGap = p.top + gap;
           if (by - br < topGap || by + br > bottomGap) {
-            die();
+            return die();
           }
         }
         if (!p.passed && p.x + pipeW < bx) {
           p.passed = true;
-          score += 1;
+          score++;
           if (score > best) best = score;
         }
       }
 
-      // floor / ceiling
-      if (by + br > H - floorH || by - br < 0) {
+      if (by + br > GAME_H - floorH || by - br < 0) {
         die();
-      }
-    }
-
-    function moveClouds(dt) {
-      const {W} = getSize();
-      for (let c of bgClouds) {
-        c.x -= c.s;
-        if (c.x + c.w < -20) {
-          c.x = W + 30;
-        }
       }
     }
 
@@ -383,116 +450,101 @@
       gameState = "gameover";
     }
 
-    // DRAWING
-    function lerp(a,b,t){ return a + (b-a)*t; }
-
+    // ============================================================
+    // 6. DRAWING
+    // ============================================================
     function drawBackground() {
-      const {W,H} = getSize();
-
       if (theme > 0.5) {
-        // graveyard
-        const g = ctx.createLinearGradient(0,0,0,H);
+        const g = ctx.createLinearGradient(0,0,0,GAME_H);
         g.addColorStop(0,"#0f172a");
         g.addColorStop(0.5,"#111827");
         g.addColorStop(1,"#020617");
         ctx.fillStyle = g;
-        ctx.fillRect(0,0,W,H);
+        ctx.fillRect(0,0,GAME_W,GAME_H);
 
         // moon
-        ctx.fillStyle = "rgba(248,250,252,0.9)";
+        ctx.fillStyle = "rgba(248,250,252,0.85)";
         ctx.beginPath();
-        ctx.arc(W*0.14, H*0.14, H*0.055, 0, Math.PI*2);
+        ctx.arc(GAME_W*0.16, GAME_H*0.12, GAME_H*0.05, 0, Math.PI*2);
         ctx.fill();
       } else {
-        const top = "rgb(" + Math.floor(lerp(126,7,theme)) + "," + Math.floor(lerp(208,25,theme)) + "," + Math.floor(lerp(255,40,theme)) + ")";
-        const mid = "rgb(" + Math.floor(lerp(201,48,theme)) + "," + Math.floor(lerp(239,71,theme)) + "," + Math.floor(lerp(255,110,theme)) + ")";
-        const bot = "rgb(" + Math.floor(lerp(253,44,theme)) + "," + Math.floor(lerp(240,58,theme)) + "," + Math.floor(lerp(213,90,theme)) + ")";
-        const g = ctx.createLinearGradient(0,0,0,H);
-        g.addColorStop(0, top);
-        g.addColorStop(0.6, mid);
-        g.addColorStop(1, bot);
+        const g = ctx.createLinearGradient(0,0,0,GAME_H);
+        g.addColorStop(0,"#7ed0ff");
+        g.addColorStop(0.6,"#c9efff");
+        g.addColorStop(1,"#fdf0d5");
         ctx.fillStyle = g;
-        ctx.fillRect(0,0,W,H);
+        ctx.fillRect(0,0,GAME_W,GAME_H);
       }
 
       // clouds
       for (let c of bgClouds) {
-        ctx.fillStyle = theme > 0.5 ? "rgba(248,250,252,0.2)" : "rgba(255,255,255,0.7)";
-        ctx.beginPath();
-        ctx.roundRect(c.x, c.y, c.w, c.h, 14);
+        ctx.fillStyle = theme > 0.5 ? "rgba(240,246,255,0.16)" : "rgba(255,255,255,0.65)";
+        roundRect(ctx, c.x, c.y, c.w, c.h, 14);
         ctx.fill();
       }
     }
 
     function drawPipes() {
-      const {W,H} = getSize();
-      const floorH = H * FLOOR_RATIO;
-      const gap = H * PIPE_GAP_RATIO;
-      const pipeW = W * PIPE_WIDTH_RATIO;
+      const floorH = GAME_H * FLOOR_RATIO;
+      const gap = GAME_H * PIPE_GAP_RATIO;
+      const pipeW = GAME_W * PIPE_WIDTH_RATIO;
 
       for (let p of pipes) {
-        const bottomH = H - floorH - (p.top + gap);
+        const bottomH = GAME_H - floorH - (p.top + gap);
 
         if (theme > 0.5) {
           // tombstones
           ctx.fillStyle = "#1f2937";
-          ctx.beginPath();
-          ctx.roundRect(p.x, 0, pipeW, p.top, 14);
+          roundRect(ctx, p.x, 0, pipeW, p.top, 14);
           ctx.fill();
-          ctx.strokeStyle = "rgba(248,250,252,0.05)";
-          ctx.strokeRect(p.x, 0, pipeW, p.top);
-
-          ctx.fillStyle = "#1f2937";
-          ctx.beginPath();
-          ctx.roundRect(p.x, p.top + gap, pipeW, bottomH, 14);
+          roundRect(ctx, p.x, p.top + gap, pipeW, bottomH, 14);
           ctx.fill();
-          ctx.strokeStyle = "rgba(248,250,252,0.05)";
-          ctx.strokeRect(p.x, p.top + gap, pipeW, bottomH);
 
           // cross
-          ctx.strokeStyle = "rgba(248,250,252,0.3)";
+          ctx.strokeStyle = "rgba(248,250,252,0.25)";
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.moveTo(p.x + pipeW/2, p.top*0.3);
           ctx.lineTo(p.x + pipeW/2, p.top*0.7);
-          ctx.moveTo(p.x + pipeW/2 - 7, p.top*0.5);
-          ctx.lineTo(p.x + pipeW/2 + 7, p.top*0.5);
+          ctx.moveTo(p.x + pipeW/2 - 8, p.top*0.5);
+          ctx.lineTo(p.x + pipeW/2 + 8, p.top*0.5);
           ctx.stroke();
         } else {
-          // normal green pipes
+          // normal pipes
           const grad = ctx.createLinearGradient(p.x,0,p.x+pipeW,0);
           grad.addColorStop(0,"#2e9f45");
           grad.addColorStop(0.5,"#44d766");
           grad.addColorStop(1,"#2d6f40");
           ctx.fillStyle = grad;
           ctx.fillRect(p.x, 0, pipeW, p.top);
-          ctx.fillRect(p.x, p.top + gap, pipeW, bottomH);
 
           ctx.fillStyle = "rgba(217,255,212,0.9)";
-          ctx.fillRect(p.x - 3, p.top - H*0.028, pipeW + 6, H*0.028);
-          ctx.fillRect(p.x - 3, p.top + gap, pipeW + 6, H*0.028);
+          ctx.fillRect(p.x - 3, p.top - GAME_H*0.028, pipeW + 6, GAME_H*0.028);
+
+          ctx.fillStyle = grad;
+          ctx.fillRect(p.x, p.top + gap, pipeW, bottomH);
+          ctx.fillStyle = "rgba(217,255,212,0.9)";
+          ctx.fillRect(p.x - 3, p.top + gap, pipeW + 6, GAME_H*0.028);
         }
       }
     }
 
     function drawGround() {
-      const {W,H} = getSize();
-      const floorH = H * FLOOR_RATIO;
-
+      const floorH = GAME_H * FLOOR_RATIO;
       if (theme > 0.5) {
         ctx.fillStyle = "#0f172a";
-        ctx.fillRect(0, H - floorH, W, floorH);
+        ctx.fillRect(0, GAME_H - floorH, GAME_W, floorH);
       } else {
         ctx.fillStyle = "#d4aa63";
-        ctx.fillRect(0, H - floorH, W, floorH);
+        ctx.fillRect(0, GAME_H - floorH, GAME_W, floorH);
         ctx.fillStyle = "#63b840";
-        ctx.fillRect(0, H - floorH, W, H*0.025);
+        ctx.fillRect(0, GAME_H - floorH, GAME_W, GAME_H*0.025);
       }
     }
 
     function drawCoins() {
       for (let c of coins) {
-        const glow = c.r * 1.8;
+        const glow = c.r * 1.7;
         ctx.save();
         ctx.globalAlpha = 0.4 + 0.2*Math.sin(c.t*2);
         const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, glow);
@@ -526,22 +578,23 @@
     }
 
     function drawBird() {
-      const {W,H} = getSize();
       ctx.save();
       ctx.translate(bird.x, bird.y);
-      const tilt = gameState === "playing" ? Math.min(Math.max(bird.vy/10, -0.45), 0.6) : Math.sin(performance.now()*0.004)*0.15;
+      const tilt = (gameState === "playing")
+        ? Math.min(Math.max(bird.vy/10, -0.45), 0.6)
+        : Math.sin(performance.now()*0.004)*0.15;
       ctx.rotate(tilt);
 
-      let base1, base2, wing, eye="#fff", pupil="#000", beak="#FF7B1A";
+      let base1, base2, wing, eye="#fff", pupil="#000", beak="#ff7b1a";
       if (selectedChar === "default") {
         base1 = "#FFD966"; base2 = "#FFAE00"; wing = "#FFE9A4";
       } else if (selectedChar === "red") {
         base1 = "#ff7878"; base2 = "#E42C2C"; wing = "#ffcccc";
       } else if (selectedChar === "shadow") {
-        base1 = "#bcd4ff"; base2 = "#3C496C"; wing = "#d2def8"; beak = "#FECB78";
+        base1 = "#bcd4ff"; base2 = "#3C496C"; wing = "#d2def8"; beak="#fecb78";
       } else {
-        // skeleton
-        base1 = "#E2E8F0"; base2 = "#94A3B8"; wing = "#CBD5E1"; eye = "#e11d48"; pupil = "#fda4af"; beak = "#ffffff";
+        base1 = "#E2E8F0"; base2 = "#94A3B8"; wing = "#CBD5E1";
+        eye = "#e11d48"; pupil = "#fda4af"; beak = "#ffffff";
       }
 
       // body
@@ -550,209 +603,138 @@
       grd.addColorStop(1, base2);
       ctx.fillStyle = grd;
       ctx.beginPath();
-      ctx.ellipse(0, 0, W*0.055, H*0.04, 0, 0, Math.PI*2);
+      ctx.ellipse(0, 0, GAME_W*0.055, GAME_H*0.04, 0, 0, Math.PI*2);
       ctx.fill();
 
       // wing
       ctx.fillStyle = wing;
-      ctx.beginPath();
-      ctx.roundRect(-W*0.03, -H*0.01, W*0.035, H*0.028, 8);
+      roundRect(ctx, -GAME_W*0.03, -GAME_H*0.01, GAME_W*0.035, GAME_H*0.028, 8);
       ctx.fill();
 
       // eye
       ctx.fillStyle = eye;
       ctx.beginPath();
-      ctx.arc(W*0.025, -H*0.012, H*0.012, 0, Math.PI*2);
+      ctx.arc(GAME_W*0.025, -GAME_H*0.012, GAME_H*0.012, 0, Math.PI*2);
       ctx.fill();
       ctx.fillStyle = pupil;
       ctx.beginPath();
-      ctx.arc(W*0.03, -H*0.012, H*0.0045, 0, Math.PI*2);
+      ctx.arc(GAME_W*0.03, -GAME_H*0.012, GAME_H*0.0045, 0, Math.PI*2);
       ctx.fill();
 
       // beak
       ctx.fillStyle = beak;
       ctx.beginPath();
-      ctx.moveTo(W*0.045, -H*0.002);
-      ctx.lineTo(W*0.07, H*0.013);
-      ctx.lineTo(W*0.045, H*0.022);
+      ctx.moveTo(GAME_W*0.045, -GAME_H*0.002);
+      ctx.lineTo(GAME_W*0.07, GAME_H*0.013);
+      ctx.lineTo(GAME_W*0.045, GAME_H*0.022);
       ctx.closePath();
       ctx.fill();
 
       ctx.restore();
-    }
-
-    // UI
-    function drawHUD() {
-      const {W,H} = getSize();
-      ctx.fillStyle = "rgba(3,7,18,0.35)";
-      ctx.beginPath();
-      ctx.roundRect(W*0.03, H*0.02, W*0.65, H*0.085, 12);
-      ctx.fill();
-
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold " + (H*0.04).toFixed(0) + "px system-ui";
-      ctx.fillText(score.toString(), W*0.05, H*0.075);
-
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = (H*0.017).toFixed(0) + "px system-ui";
-      ctx.fillText("Best: " + best, W*0.05, H*0.102);
-
-      drawCoinHUD(W - 90, 30, totalCoins);
     }
 
     function drawCoinHUD(x,y,val) {
-      ctx.save();
-      ctx.globalAlpha = 0.5;
-      const g = ctx.createRadialGradient(x,y,0,x,y,16);
-      g.addColorStop(0,"rgba(255,214,120,1)");
-      g.addColorStop(1,"rgba(255,214,120,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(x,y,16,0,Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-
+      // coin
       ctx.fillStyle = "#FFD447";
       ctx.beginPath();
-      ctx.arc(x, y, 10, 0, Math.PI*2);
+      ctx.arc(x, y, 13, 0, Math.PI*2);
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.strokeStyle = "rgba(255,255,255,0.7)";
       ctx.stroke();
-
       ctx.fillStyle = "#fff";
-      ctx.font = "12px system-ui";
-      ctx.fillText("x " + val, x+16, y+4);
+      ctx.font = "14px system-ui";
+      ctx.fillText("x " + val, x + 18, y + 5);
     }
 
-    function getPlayBtn(W,H) {
-      const w = Math.min(W*0.48, 230);
-      const h = Math.min(H*0.09, 58);
-      return { x: (W-w)/2, y: H*0.54, w, h };
+    function getPlayBtn() {
+      const w = GAME_W*0.5;
+      const h = GAME_H*0.07;
+      return { x: (GAME_W-w)/2, y: GAME_H*0.54, w, h };
     }
-
-    function getStoreBtn(W,H) {
-      const base = getPlayBtn(W,H);
-      return { x: base.x, y: base.y + base.h + H*0.018, w: base.w, h: base.h };
-    }
-
-    function drawPrimaryButton(r, label) {
-      const g = ctx.createLinearGradient(r.x,r.y,r.x+r.w,r.y+r.h);
-      g.addColorStop(0,"#38bdf8");
-      g.addColorStop(1,"#0ea5e9");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(r.x, r.y, r.w, r.h, 16);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "600 " + (r.h*0.38).toFixed(0) + "px system-ui";
-      const tw = ctx.measureText(label).width;
-      ctx.fillText(label, r.x + (r.w - tw)/2, r.y + r.h*0.66);
-    }
-
-    function drawStoreButton(r) {
-      const g = ctx.createLinearGradient(r.x,r.y,r.x+r.w,r.y+r.h);
-      g.addColorStop(0,"#f97316");
-      g.addColorStop(1,"#ea580c");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(r.x, r.y, r.w, r.h, 16);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.font = "600 " + (r.h*0.35).toFixed(0) + "px system-ui";
-      ctx.fillText("Store", r.x + r.w*0.35, r.y + r.h*0.66);
-
-      // cart icon
-      const x = r.x + r.h*0.25;
-      const y = r.y + r.h*0.25;
-      const s = r.h*0.4;
-      ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = 1.7;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + s*0.1, y + s);
-      ctx.lineTo(x + s, y + s);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x + s*0.15, y + s*0.15);
-      ctx.lineTo(x + s, y + s*0.15);
-      ctx.lineTo(x + s*0.82, y + s*0.7);
-      ctx.lineTo(x + s*0.2, y + s*0.7);
-      ctx.closePath();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(x + s*0.25, y + s*1.02, s*0.13, 0, Math.PI*2);
-      ctx.arc(x + s*0.78, y + s*1.02, s*0.13, 0, Math.PI*2);
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fill();
+    function getStoreBtn() {
+      const p = getPlayBtn();
+      const h = p.h;
+      return { x: p.x, y: p.y + h + GAME_H*0.02, w: p.w, h };
     }
 
     function drawHomeScreen() {
-      const {W,H} = getSize();
       ctx.fillStyle = "rgba(3,7,18,0.35)";
-      ctx.beginPath();
-      ctx.roundRect(W*0.08, H*0.13, W*0.84, H*0.62, 18);
+      roundRect(ctx, GAME_W*0.08, GAME_H*0.13, GAME_W*0.84, GAME_H*0.62, 18);
       ctx.fill();
 
       ctx.fillStyle = "#fff";
-      ctx.font = "600 " + (H*0.045).toFixed(0) + "px system-ui";
-      ctx.fillText("Flappy Bird+", W*0.24, H*0.21);
+      ctx.font = "600 " + (GAME_H*0.045).toFixed(0) + "px system-ui";
+      ctx.fillText("Flappy Bird+", GAME_W*0.24, GAME_H*0.2);
 
       ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.font = (H*0.02).toFixed(0) + "px system-ui";
-      ctx.fillText("Collect coins. Unlock birds. Skeleton = tombstones.", W*0.16, H*0.26);
+      ctx.font = (GAME_H*0.02).toFixed(0) + "px system-ui";
+      ctx.fillText("Collect coins. Unlock birds. Skeleton = tombstones + spooky music.", GAME_W*0.10, GAME_H*0.25);
 
-      drawCoinHUD(W*0.5, H*0.31, totalCoins);
+      drawCoinHUD(GAME_W*0.5, GAME_H*0.31, totalCoins);
 
-      const playBtn = getPlayBtn(W,H);
-      drawPrimaryButton(playBtn, "Play");
+      const pb = getPlayBtn();
+      const g1 = ctx.createLinearGradient(pb.x,pb.y,pb.x+pb.w,pb.y+pb.h);
+      g1.addColorStop(0,"#38bdf8");
+      g1.addColorStop(1,"#0ea5e9");
+      ctx.fillStyle = g1;
+      roundRect(ctx, pb.x, pb.y, pb.w, pb.h, 16);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "600 " + (pb.h*0.45).toFixed(0) + "px system-ui";
+      const tw = ctx.measureText("Play").width;
+      ctx.fillText("Play", pb.x + (pb.w - tw)/2, pb.y + pb.h*0.68);
 
-      const storeBtn = getStoreBtn(W,H);
-      drawStoreButton(storeBtn);
+      const sb = getStoreBtn();
+      const g2 = ctx.createLinearGradient(sb.x,sb.y,sb.x+sb.w,sb.y+sb.h);
+      g2.addColorStop(0,"#f97316");
+      g2.addColorStop(1,"#ea580c");
+      ctx.fillStyle = g2;
+      roundRect(ctx, sb.x, sb.y, sb.w, sb.h, 16);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "600 " + (sb.h*0.42).toFixed(0) + "px system-ui";
+      ctx.fillText("Store", sb.x + sb.w*0.34, sb.y + sb.h*0.7);
 
       ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.font = (H*0.018).toFixed(0) + "px system-ui";
-      ctx.fillText("Best: " + best, W*0.4, storeBtn.y + storeBtn.h + H*0.045);
+      ctx.font = (GAME_H*0.018).toFixed(0) + "px system-ui";
+      ctx.fillText("Best: " + best, GAME_W*0.40, sb.y + sb.h + GAME_H*0.045);
     }
 
     function drawStoreScreen() {
-      const {W,H} = getSize();
-      ctx.fillStyle = "rgba(2,6,23,0.62)";
-      ctx.beginPath();
-      ctx.roundRect(W*0.04, H*0.035, W*0.92, H*0.92, 18);
+      ctx.fillStyle = "rgba(2,6,23,0.65)";
+      roundRect(ctx, GAME_W*0.04, GAME_H*0.035, GAME_W*0.92, GAME_H*0.92, 18);
       ctx.fill();
 
       // back
       ctx.fillStyle = "rgba(15,118,178,0.85)";
-      ctx.beginPath();
-      ctx.roundRect(W*0.05, H*0.045, W*0.2, H*0.06, 10);
+      roundRect(ctx, GAME_W*0.05, GAME_H*0.045, GAME_W*0.22, GAME_H*0.055, 10);
       ctx.fill();
       ctx.fillStyle = "#fff";
-      ctx.font = (H*0.022).toFixed(0) + "px system-ui";
-      ctx.fillText("← Home", W*0.065, H*0.085);
+      ctx.font = (GAME_H*0.022).toFixed(0) + "px system-ui";
+      ctx.fillText("← Home", GAME_W*0.065, GAME_H*0.085);
 
       // title
       ctx.fillStyle = "#fff";
-      ctx.font = "600 " + (H*0.03).toFixed(0) + "px system-ui";
-      ctx.fillText("Store", W*0.28, H*0.085);
+      ctx.font = "600 " + (GAME_H*0.03).toFixed(0) + "px system-ui";
+      ctx.fillText("Store", GAME_W*0.35, GAME_H*0.085);
 
-      drawCoinHUD(W*0.87, H*0.08, totalCoins);
+      drawCoinHUD(GAME_W*0.87, GAME_H*0.085, totalCoins);
 
-      const startX = W*0.08;
-      const startY = H*0.16;
-      const cardW = W*0.36;
-      const cardH = H*0.19;
-      const gapX = W*0.04;
+      const startX = GAME_W*0.08;
+      const startY = GAME_H*0.16;
+      const cardW  = GAME_W*0.38;
+      const cardH  = GAME_H*0.19;
+      const gapX   = GAME_W*0.04;
 
       for (let i = 0; i < CHARACTERS.length; i++) {
         const ch = CHARACTERS[i];
         const col = i % 2;
         const row = Math.floor(i / 2);
         const cx = startX + col*(cardW+gapX);
-        const cy = startY + row*(cardH + H*0.025);
+        const cy = startY + row*(cardH + GAME_H*0.03);
 
-        ctx.fillStyle = "rgba(255,255,255,0.018)";
-        ctx.beginPath();
-        ctx.roundRect(cx, cy, cardW, cardH, 14);
+        ctx.fillStyle = "rgba(255,255,255,0.03)";
+        roundRect(ctx, cx, cy, cardW, cardH, 14);
         ctx.fill();
         ctx.strokeStyle = (ch.id === selectedChar) ? "rgba(56,189,248,0.9)" : "rgba(255,255,255,0.05)";
         ctx.lineWidth = (ch.id === selectedChar) ? 2 : 1;
@@ -760,28 +742,28 @@
 
         // mini bird
         ctx.save();
-        ctx.translate(cx + cardW/2, cy + H*0.055);
-        ctx.scale(0.8,0.8);
+        ctx.translate(cx + cardW/2, cy + GAME_H*0.055);
+        ctx.scale(0.7, 0.7);
         drawSmallBirdPreview(ch.id);
         ctx.restore();
 
         ctx.fillStyle = "#fff";
-        ctx.font = (H*0.021).toFixed(0) + "px system-ui";
+        ctx.font = (GAME_H*0.02).toFixed(0) + "px system-ui";
         const tw = ctx.measureText(ch.name).width;
-        ctx.fillText(ch.name, cx + (cardW - tw)/2, cy + H*0.12);
+        ctx.fillText(ch.name, cx + (cardW - tw)/2, cy + GAME_H*0.12);
 
         if (ownedChars.has(ch.id)) {
           ctx.fillStyle = "rgba(34,197,94,0.85)";
-          ctx.font = (H*0.016).toFixed(0) + "px system-ui";
-          ctx.fillText("Owned", cx + cardW*0.6, cy + H*0.15);
+          ctx.font = (GAME_H*0.016).toFixed(0) + "px system-ui";
+          ctx.fillText("Owned", cx + cardW*0.58, cy + GAME_H*0.15);
         } else {
-          drawCoinHUD(cx + W*0.07, cy + H*0.15, ch.price);
+          drawCoinHUD(cx + GAME_W*0.07, cy + GAME_H*0.15, ch.price);
         }
       }
     }
 
     function drawSmallBirdPreview(id) {
-      let base1, base2, wing, beak="#ff7b1a", eye="#fff", pupil="#000";
+      let base1, base2, wing, eye="#fff", pupil="#000", beak="#ff7b1a";
       if (id === "default") {
         base1 = "#FFD966"; base2 = "#FFAE00"; wing = "#FFE9A4";
       } else if (id === "red") {
@@ -792,16 +774,15 @@
         base1 = "#E2E8F0"; base2 = "#94A3B8"; wing = "#CBD5E1"; eye="#e11d48"; pupil="#fda4af"; beak="#fff";
       }
 
-      const g = ctx.createLinearGradient(-12,-16,24,16);
-      g.addColorStop(0,base1); g.addColorStop(1,base2);
+      const g = ctx.createLinearGradient(-12, -16, 24, 16);
+      g.addColorStop(0, base1); g.addColorStop(1, base2);
       ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.ellipse(0,0,22,16,0,0,Math.PI*2);
+      ctx.ellipse(0, 0, 22, 16, 0, 0, Math.PI*2);
       ctx.fill();
 
       ctx.fillStyle = wing;
-      ctx.beginPath();
-      ctx.roundRect(-10, 0, 16, 9, 6);
+      roundRect(ctx, -10, 0, 16, 9, 6);
       ctx.fill();
 
       ctx.fillStyle = eye;
@@ -822,58 +803,82 @@
       ctx.fill();
     }
 
-    function drawGameOver() {
-      const {W,H} = getSize();
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(0,0,W,H);
+    function drawHUD() {
+      // score box
+      ctx.fillStyle = "rgba(3,7,18,0.35)";
+      roundRect(ctx, GAME_W*0.03, GAME_H*0.02, GAME_W*0.6, GAME_H*0.08, 12);
+      ctx.fill();
 
-      const cardW = W*0.7;
-      const cardH = H*0.35;
-      const cx = (W - cardW)/2;
-      const cy = (H - cardH)/2;
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold " + (GAME_H*0.042).toFixed(0) + "px system-ui";
+      ctx.fillText(score.toString(), GAME_W*0.05, GAME_H*0.08);
+
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.font = (GAME_H*0.018).toFixed(0) + "px system-ui";
+      ctx.fillText("Best: " + best, GAME_W*0.05, GAME_H*0.107);
+
+      drawCoinHUD(GAME_W - 90, 45, totalCoins);
+    }
+
+    function drawGameOver() {
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0,0,GAME_W,GAME_H);
+
+      const cardW = GAME_W*0.7;
+      const cardH = GAME_H*0.35;
+      const cx = (GAME_W - cardW)/2;
+      const cy = (GAME_H - cardH)/2;
 
       ctx.fillStyle = "rgba(255,255,255,0.98)";
-      ctx.beginPath();
-      ctx.roundRect(cx, cy, cardW, cardH, 14);
+      roundRect(ctx, cx, cy, cardW, cardH, 16);
       ctx.fill();
 
       ctx.fillStyle = "#0f172a";
-      ctx.font = "600 " + (H*0.03).toFixed(0) + "px system-ui";
-      ctx.fillText("Game Over", cx + W*0.15, cy + H*0.05);
+      ctx.font = "600 " + (GAME_H*0.03).toFixed(0) + "px system-ui";
+      ctx.fillText("Game Over", cx + GAME_W*0.15, cy + GAME_H*0.045);
 
       ctx.fillStyle = "#334155";
-      ctx.font = (H*0.020).toFixed(0) + "px system-ui";
-      ctx.fillText("Score: " + score, cx + W*0.05, cy + H*0.10);
-      ctx.fillText("Best: " + best,  cx + W*0.05, cy + H*0.135);
-      ctx.fillText("Coins: " + totalCoins, cx + W*0.05, cy + H*0.17);
+      ctx.font = (GAME_H*0.02).toFixed(0) + "px system-ui";
+      ctx.fillText("Score: " + score, cx + GAME_W*0.05, cy + GAME_H*0.095);
+      ctx.fillText("Best: " + best, cx + GAME_W*0.05, cy + GAME_H*0.13);
+      ctx.fillText("Coins: " + totalCoins, cx + GAME_W*0.05, cy + GAME_H*0.165);
 
-      const bx = cx + W*0.06;
-      const by = cy + H*0.215;
-      const bw = cardW - W*0.12;
-      const bh = H*0.055;
+      const bx = cx + GAME_W*0.05;
+      const by = cy + GAME_H*0.22;
+      const bw = cardW - GAME_W*0.1;
+      const bh = GAME_H*0.055;
       const g = ctx.createLinearGradient(bx,by,bx+bw,by+bh);
       g.addColorStop(0,"#38bdf8");
       g.addColorStop(1,"#0ea5e9");
       ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.roundRect(bx,by,bw,bh,10);
+      roundRect(ctx, bx, by, bw, bh, 10);
       ctx.fill();
 
       ctx.fillStyle = "#fff";
-      ctx.font = (H*0.02).toFixed(0) + "px system-ui";
-      ctx.fillText("Back to home", bx + W*0.05, by + H*0.04);
+      ctx.font = (GAME_H*0.02).toFixed(0) + "px system-ui";
+      ctx.fillText("Back to home", bx + GAME_W*0.045, by + GAME_H*0.04);
     }
 
-    // LOOP
+    // ============================================================
+    // 7. LOOP
+    // ============================================================
     let last = performance.now();
     function loop(now) {
       const dt = now - last;
       last = now;
+
       update(dt, now);
 
-      const {W,H} = getSize();
-      ctx.clearRect(0,0,W,H);
+      // clear screen (real pixels)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0,0,screenW,screenH);
 
+      // move to center & scale to game world
+      ctx.save();
+      ctx.translate(offsetX, offsetY);
+      ctx.scale(scale, scale);
+
+      // draw world
       drawBackground();
       drawPipes();
       drawGround();
@@ -892,10 +897,11 @@
         drawGameOver();
       }
 
+      ctx.restore();
+
       requestAnimationFrame(loop);
     }
 
-    resetGame(true);
     requestAnimationFrame(loop);
   </script>
 </body>
