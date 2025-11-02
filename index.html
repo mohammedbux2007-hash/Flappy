@@ -110,7 +110,8 @@
       { id: "bird", name: "Classic Bird", price: 0, unlockMeters: 0 },
       { id: "skeleton", name: "Skeleton Bird", price: 100, unlockMeters: 0 },
       { id: "ghost", name: "Ghost", price: 250, unlockMeters: 0 },
-      { id: "plane", name: "Aeroplane", price: 0, unlockMeters: 500 }
+      { id: "plane", name: "Aeroplane", price: 0, unlockMeters: 500 },
+      { id: "fish", name: "Fish", price: 200, unlockMeters: 0 }
     ];
     let activeSkin = "bird";
     let ownedSkins = { bird: true };
@@ -126,6 +127,10 @@
     let totalCoins = 0;
     let particles = [];
 
+    // underwater stuff (used when fish active)
+    let bubbles = [];
+    let seaCreatures = [];
+
     // home buttons
     const homeButtons = {
       play: { x: 90, y: 220, w: 180, h: 50 },
@@ -137,6 +142,7 @@
     let musicGain = null;
     let musicStarted = false;
     let muted = false;
+    let musicMode = "pop"; // "pop" or "sea"
 
     const pauseBtn = document.getElementById("pauseBtn");
     const muteBtn = document.getElementById("muteBtn");
@@ -159,6 +165,7 @@
       if (savedMeters) {
         maxMetersReached = parseInt(savedMeters, 10) || 0;
       }
+      if (activeSkin === "fish") musicMode = "sea";
     } catch(e) {}
 
     function saveProgress() {
@@ -184,6 +191,30 @@
       }
     }
 
+    function initSea() {
+      bubbles = [];
+      seaCreatures = [];
+      for (let i = 0; i < 10; i++) {
+        bubbles.push({
+          x: Math.random() * BASE_W,
+          y: Math.random() * BASE_H,
+          r: Math.random() * 4 + 2,
+          s: Math.random() * 0.3 + 0.15
+        });
+      }
+      for (let i = 0; i < 4; i++) {
+        seaCreatures.push({
+          x: Math.random() * BASE_W,
+          y: 120 + Math.random() * 250,
+          w: 28 + Math.random() * 16,
+          h: 12 + Math.random() * 6,
+          s: 0.3 + Math.random() * 0.2,
+          dir: Math.random() < 0.5 ? 1 : -1,
+          col: i % 2 === 0 ? "rgba(255,255,255,0.35)" : "rgba(248,250,252,0.22)"
+        });
+      }
+    }
+
     function resetGame(full = true) {
       bird = {
         x: 78,
@@ -199,6 +230,9 @@
       score = 0;
       groundOffset = 0;
       initClouds();
+      if (activeSkin === "fish") {
+        initSea();
+      }
       themeTarget = 0;
       themeLerp = 0;
       if (full) gameState = "home";
@@ -257,73 +291,137 @@
     }
 
     function startMusicIfNeeded() {
-      if (musicStarted || muted) return;
+      if (muted) return;
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       }
-      musicGain = audioCtx.createGain();
-      musicGain.gain.value = 0.48;
-      musicGain.connect(audioCtx.destination);
-
-      const tempo = 110;
-      const beat = 60 / tempo;
-      const bar = beat * 4;
-
-      function scheduleBeat(startTime) {
-        for (let i = 0; i < 4; i++) {
-          const t = startTime + i * beat;
-
-          // kick
-          const kick = audioCtx.createOscillator();
-          kick.type = "sine";
-          const kickGain = audioCtx.createGain();
-          kickGain.gain.setValueAtTime(0.9, t);
-          kickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
-          kick.frequency.setValueAtTime(95, t);
-          kick.frequency.exponentialRampToValueAtTime(35, t + 0.25);
-          kick.connect(kickGain).connect(musicGain);
-          kick.start(t);
-          kick.stop(t + 0.3);
-
-          // snare (2 and 4)
-          if (i === 1 || i === 3) {
-            const snare = audioCtx.createBufferSource();
-            const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let j = 0; j < data.length; j++) {
-              data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / data.length, 2);
-            }
-            const snareGain = audioCtx.createGain();
-            snareGain.gain.setValueAtTime(0.55, t);
-            snareGain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-            snare.buffer = buffer;
-            snare.connect(snareGain).connect(musicGain);
-            snare.start(t);
-          }
-
-          // lead
-          const notes = [262, 330, 392, 523];
-          if (i % 2 === 0) {
-            const lead = audioCtx.createOscillator();
-            lead.type = "triangle";
-            lead.frequency.value = notes[i % notes.length];
-            const leadGain = audioCtx.createGain();
-            leadGain.gain.setValueAtTime(0, t);
-            leadGain.gain.linearRampToValueAtTime(0.4, t + 0.02);
-            leadGain.gain.linearRampToValueAtTime(0, t + beat * 0.65);
-            lead.connect(leadGain).connect(musicGain);
-            lead.start(t);
-            lead.stop(t + beat * 0.7);
-          }
-        }
-
-        setTimeout(() => {
-          if (!muted) scheduleBeat(audioCtx.currentTime + 0.05);
-        }, bar * 1000);
+      if (!musicGain) {
+        musicGain = audioCtx.createGain();
+        musicGain.gain.value = 0.48;
+        musicGain.connect(audioCtx.destination);
       }
 
-      scheduleBeat(audioCtx.currentTime + 0.05);
-      musicStarted = true;
+      // we use a looping scheduler that checks musicMode
+      if (!musicStarted) {
+        musicStarted = true;
+        scheduleMusicLoop();
+      }
+    }
+
+    function scheduleMusicLoop() {
+      if (!audioCtx || !musicGain) return;
+      const startTime = audioCtx.currentTime + 0.05;
+
+      if (musicMode === "pop") {
+        playPopBar(startTime);
+        setTimeout(() => {
+          if (!muted) scheduleMusicLoop();
+        }, 2200);
+      } else {
+        playSeaBar(startTime);
+        setTimeout(() => {
+          if (!muted) scheduleMusicLoop();
+        }, 2400);
+      }
+    }
+
+    function playPopBar(t0) {
+      const tempo = 110;
+      const beat = 60 / tempo;
+      for (let i = 0; i < 4; i++) {
+        const t = t0 + i * beat;
+        // kick
+        const kick = audioCtx.createOscillator();
+        kick.type = "sine";
+        const kg = audioCtx.createGain();
+        kg.gain.setValueAtTime(0.9, t);
+        kg.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        kick.frequency.setValueAtTime(95, t);
+        kick.frequency.exponentialRampToValueAtTime(35, t + 0.25);
+        kick.connect(kg).connect(musicGain);
+        kick.start(t);
+        kick.stop(t + 0.3);
+
+        // snare
+        if (i === 1 || i === 3) {
+          const snare = audioCtx.createBufferSource();
+          const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let j = 0; j < data.length; j++) {
+            data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / data.length, 2);
+          }
+          const sg = audioCtx.createGain();
+          sg.gain.setValueAtTime(0.55, t);
+          sg.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+          snare.buffer = buffer;
+          snare.connect(sg).connect(musicGain);
+          snare.start(t);
+        }
+
+        // lead
+        const notes = [262, 330, 392, 523];
+        if (i % 2 === 0) {
+          const lead = audioCtx.createOscillator();
+          lead.type = "triangle";
+          lead.frequency.value = notes[i % notes.length];
+          const lg = audioCtx.createGain();
+          lg.gain.setValueAtTime(0, t);
+          lg.gain.linearRampToValueAtTime(0.4, t + 0.02);
+          lg.gain.linearRampToValueAtTime(0, t + beat * 0.65);
+          lead.connect(lg).connect(musicGain);
+          lead.start(t);
+          lead.stop(t + beat * 0.7);
+        }
+      }
+    }
+
+    // slightly calypso / "under the sea"-ish
+    function playSeaBar(t0) {
+      const tempo = 95;
+      const beat = 60 / tempo;
+      const bassNotes = [196, 220, 247, 220];
+
+      for (let i = 0; i < 4; i++) {
+        const t = t0 + i * beat;
+
+        // conga-ish bump
+        const drum = audioCtx.createOscillator();
+        drum.type = "sine";
+        const dg = audioCtx.createGain();
+        dg.gain.setValueAtTime(0.6, t);
+        dg.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        drum.frequency.setValueAtTime(140, t);
+        drum.frequency.exponentialRampToValueAtTime(60, t + 0.25);
+        drum.connect(dg).connect(musicGain);
+        drum.start(t);
+        drum.stop(t + 0.3);
+
+        // steel-drum style pluck
+        const pluck = audioCtx.createOscillator();
+        pluck.type = "triangle";
+        pluck.frequency.value = bassNotes[i % bassNotes.length];
+        const pg = audioCtx.createGain();
+        pg.gain.setValueAtTime(0.0, t);
+        pg.gain.linearRampToValueAtTime(0.35, t + 0.03);
+        pg.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+        pluck.connect(pg).connect(musicGain);
+        pluck.start(t);
+        pluck.stop(t + 0.5);
+
+        // offbeat shaker
+        const sh = audioCtx.createBufferSource();
+        const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let j = 0; j < data.length; j++) {
+          data[j] = (Math.random() * 2 - 1) * (1 - j / data.length);
+        }
+        const sg = audioCtx.createGain();
+        sg.gain.setValueAtTime(0.25, t + beat * 0.5);
+        sg.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.5 + 0.08);
+        sh.buffer = buffer;
+        sh.connect(sg).connect(musicGain);
+        sh.start(t + beat * 0.5);
+      }
     }
 
     canvas.addEventListener("mousedown", tapHandler);
@@ -355,6 +453,12 @@
 
       if (gameState === "store") {
         const storeRects = getStoreRects();
+        // back button
+        const backBtn = getStoreBackButton();
+        if (pointInRect(mx, my, backBtn)) {
+          gameState = "home";
+          return;
+        }
         for (let s of storeRects) {
           if (pointInRect(mx, my, s.rect)) {
             onStoreSelect(s.skin);
@@ -418,6 +522,27 @@
       }
     }
 
+    function moveBubbles(dt) {
+      for (let b of bubbles) {
+        b.y -= b.s * 2;
+        if (b.y < -10) {
+          b.y = BASE_H + 20;
+          b.x = Math.random() * BASE_W;
+        }
+      }
+      for (let sc of seaCreatures) {
+        sc.x += sc.s * sc.dir;
+        if (sc.dir > 0 && sc.x - sc.w > BASE_W + 20) {
+          sc.x = -30;
+          sc.y = 120 + Math.random() * 250;
+        }
+        if (sc.dir < 0 && sc.x + sc.w < -20) {
+          sc.x = BASE_W + 30;
+          sc.y = 120 + Math.random() * 250;
+        }
+      }
+    }
+
     function spawnCoinBurst(x, y) {
       for (let i = 0; i < 6; i++) {
         particles.push({
@@ -448,24 +573,30 @@
       particles = particles.filter(p => p.life > 0);
 
       if (gameState === "home" || gameState === "store") {
-        moveClouds(dt);
+        if (activeSkin === "fish") {
+          moveBubbles(dt);
+        } else {
+          moveClouds(dt);
+        }
         if (gameState === "home") {
           bird.y = BASE_H/2 + Math.sin(now * 0.004) * 8;
         }
         return;
       }
       if (gameState === "paused") {
-        moveClouds(dt);
+        if (activeSkin === "fish") moveBubbles(dt); else moveClouds(dt);
         return;
       }
       if (gameState === "gameover") {
-        moveClouds(dt);
+        if (activeSkin === "fish") moveBubbles(dt); else moveClouds(dt);
         return;
       }
 
       // playing
-      themeTarget = getThemeTargetFromScore(score);
-      themeLerp += (themeTarget - themeLerp) * THEME_LERP_SPEED;
+      if (activeSkin !== "fish") {
+        themeTarget = getThemeTargetFromScore(score);
+        themeLerp += (themeTarget - themeLerp) * THEME_LERP_SPEED;
+      }
 
       bird.vy += GRAVITY;
       bird.y += bird.vy;
@@ -494,7 +625,12 @@
       }
       coins = coins.filter(c => !c.collected && c.x + c.r > -10);
 
-      moveClouds(dt);
+      if (activeSkin === "fish") {
+        moveBubbles(dt);
+      } else {
+        moveClouds(dt);
+      }
+
       groundOffset -= SCROLL_SPEED;
       if (groundOffset <= -72) groundOffset = 0;
 
@@ -554,99 +690,191 @@
 
     // background
     function drawBackground() {
-      const daySkyTop = [151, 216, 255];
-      const daySkyBot = [219, 243, 255];
-      const sunsetTop = [253, 183, 144];
-      const sunsetBot = [255, 236, 205];
+      if (activeSkin === "fish") {
+        // underwater
+        const grad = ctx.createLinearGradient(0,0,0,BASE_H);
+        grad.addColorStop(0, "#0f172a");
+        grad.addColorStop(0.35, "#14577d");
+        grad.addColorStop(1, "#0f766e");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0,BASE_W,BASE_H);
 
-      const top = lerpColor(daySkyTop, sunsetTop, themeLerp);
-      const bot = lerpColor(daySkyBot, sunsetBot, themeLerp);
+        // light rays
+        ctx.fillStyle = "rgba(255,255,255,0.03)";
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath();
+          ctx.moveTo(40 + i*70, 0);
+          ctx.lineTo(10 + i*70, 180);
+          ctx.lineTo(80 + i*70, 180);
+          ctx.closePath();
+          ctx.fill();
+        }
 
-      const grad = ctx.createLinearGradient(0,0,0,BASE_H);
-      grad.addColorStop(0, `rgb(${top[0]},${top[1]},${top[2]})`);
-      grad.addColorStop(1, `rgb(${bot[0]},${bot[1]},${bot[2]})`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(0,0,BASE_W,BASE_H);
+        // sea creatures
+        for (let sc of seaCreatures) {
+          ctx.fillStyle = sc.col;
+          ctx.beginPath();
+          ctx.ellipse(sc.x, sc.y, sc.w, sc.h, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.moveTo(sc.x - sc.w, sc.y);
+          ctx.lineTo(sc.x - sc.w - 8 * sc.dir, sc.y - 4);
+          ctx.lineTo(sc.x - sc.w - 8 * sc.dir, sc.y + 4);
+          ctx.closePath();
+          ctx.fill();
+        }
 
-      const sunY = 80 + 40 * themeLerp;
-      ctx.fillStyle = `rgba(255,245,220,${0.9 - 0.4*themeLerp})`;
-      ctx.beginPath();
-      ctx.arc(60, sunY, 38, 0, Math.PI * 2);
-      ctx.fill();
+        // bubbles
+        for (let b of bubbles) {
+          ctx.fillStyle = "rgba(236,252,203,0.4)";
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(236,252,203,0.65)";
+          ctx.lineWidth = 0.6;
+          ctx.stroke();
+        }
 
-      // distant hills
-      ctx.fillStyle = `rgba(${70 - 10*themeLerp}, ${130 - 22*themeLerp}, ${95 - 12*themeLerp}, 0.9)`;
-      ctx.beginPath();
-      ctx.moveTo(0, 280);
-      ctx.quadraticCurveTo(90, 230, 180, 270);
-      ctx.quadraticCurveTo(260, 300, 360, 260);
-      ctx.lineTo(360, 360);
-      ctx.lineTo(0, 360);
-      ctx.closePath();
-      ctx.fill();
+      } else {
+        const daySkyTop = [151, 216, 255];
+        const daySkyBot = [219, 243, 255];
+        const sunsetTop = [253, 183, 144];
+        const sunsetBot = [255, 236, 205];
 
-      ctx.fillStyle = `rgba(${50 - 15*themeLerp}, ${105 - 20*themeLerp}, ${73 - 15*themeLerp}, 0.7)`;
-      ctx.beginPath();
-      ctx.moveTo(0, 310);
-      ctx.quadraticCurveTo(45, 280, 130, 315);
-      ctx.quadraticCurveTo(220, 348, 360, 320);
-      ctx.lineTo(360, 380);
-      ctx.lineTo(0, 380);
-      ctx.closePath();
-      ctx.fill();
+        const top = lerpColor(daySkyTop, sunsetTop, themeLerp);
+        const bot = lerpColor(daySkyBot, sunsetBot, themeLerp);
 
-      // clouds
-      for (let c of bgClouds) {
-        const cloudAlpha = 0.8 - 0.5 * themeLerp;
-        ctx.fillStyle = `rgba(255,255,255,${cloudAlpha})`;
+        const grad = ctx.createLinearGradient(0,0,0,BASE_H);
+        grad.addColorStop(0, `rgb(${top[0]},${top[1]},${top[2]})`);
+        grad.addColorStop(1, `rgb(${bot[0]},${bot[1]},${bot[2]})`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0,BASE_W,BASE_H);
+
+        const sunY = 80 + 40 * themeLerp;
+        ctx.fillStyle = `rgba(255,245,220,${0.9 - 0.4*themeLerp})`;
         ctx.beginPath();
-        ctx.roundRect(c.x, c.y, c.w, c.h, 12);
+        ctx.arc(60, sunY, 38, 0, Math.PI * 2);
         ctx.fill();
+
+        // distant hills
+        ctx.fillStyle = `rgba(${70 - 10*themeLerp}, ${130 - 22*themeLerp}, ${95 - 12*themeLerp}, 0.9)`;
+        ctx.beginPath();
+        ctx.moveTo(0, 280);
+        ctx.quadraticCurveTo(90, 230, 180, 270);
+        ctx.quadraticCurveTo(260, 300, 360, 260);
+        ctx.lineTo(360, 360);
+        ctx.lineTo(0, 360);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = `rgba(${50 - 15*themeLerp}, ${105 - 20*themeLerp}, ${73 - 15*themeLerp}, 0.7)`;
+        ctx.beginPath();
+        ctx.moveTo(0, 310);
+        ctx.quadraticCurveTo(45, 280, 130, 315);
+        ctx.quadraticCurveTo(220, 348, 360, 320);
+        ctx.lineTo(360, 380);
+        ctx.lineTo(0, 380);
+        ctx.closePath();
+        ctx.fill();
+
+        // clouds
+        for (let c of bgClouds) {
+          const cloudAlpha = 0.8 - 0.5 * themeLerp;
+          ctx.fillStyle = `rgba(255,255,255,${cloudAlpha})`;
+          ctx.beginPath();
+          ctx.roundRect(c.x, c.y, c.w, c.h, 12);
+          ctx.fill();
+        }
       }
     }
 
     function drawPipes() {
-      for (let p of pipes) {
-        const c1 = lerpColor([46,159,69],[43,58,85], themeLerp);
-        const c2 = lerpColor([62,207,91],[61,83,116], themeLerp);
-        const c3 = lerpColor([43,127,59],[31,40,55], themeLerp);
-        const grad = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
-        grad.addColorStop(0, `rgb(${c1[0]},${c1[1]},${c1[2]})`);
-        grad.addColorStop(0.5, `rgb(${c2[0]},${c2[1]},${c2[2]})`);
-        grad.addColorStop(1, `rgb(${c3[0]},${c3[1]},${c3[2]})`);
-        ctx.fillStyle = grad;
+      if (activeSkin === "fish") {
+        // underwater pipes = coral towers
+        for (let p of pipes) {
+          const g = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+          g.addColorStop(0, "rgba(13,148,136,0.95)");
+          g.addColorStop(1, "rgba(22,101,114,0.82)");
+          ctx.fillStyle = g;
 
-        ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
-        const lipColor = `rgba(${Math.floor(217 - 60*themeLerp)},${Math.floor(255 - 60*themeLerp)},${Math.floor(212 - 60*themeLerp)},${1 - 0.4*themeLerp})`;
-        ctx.fillStyle = lipColor;
-        ctx.fillRect(p.x - 3, p.top - 16, PIPE_WIDTH + 6, 16);
+          // top coral
+          ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+          ctx.fillStyle = "rgba(226,232,240,0.6)";
+          ctx.fillRect(p.x - 3, p.top - 10, PIPE_WIDTH + 6, 10);
 
-        const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + PIPE_GAP);
-        ctx.fillStyle = grad;
-        ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
-        ctx.fillStyle = lipColor;
-        ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+          // bottom coral
+          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + PIPE_GAP);
+          ctx.fillStyle = g;
+          ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
+          ctx.fillStyle = "rgba(226,232,240,0.6)";
+          ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 10);
 
-        if (p.moving) {
-          ctx.fillStyle = "rgba(255,255,255,0.35)";
-          ctx.fillRect(p.x + PIPE_WIDTH/2 - 4, p.top - 22, 8, 8);
+          if (p.moving) {
+            ctx.fillStyle = "rgba(236,252,203,0.6)";
+            ctx.fillRect(p.x + PIPE_WIDTH/2 - 3, p.top - 20, 6, 6);
+          }
+        }
+      } else {
+        for (let p of pipes) {
+          const c1 = lerpColor([46,159,69],[43,58,85], themeLerp);
+          const c2 = lerpColor([62,207,91],[61,83,116], themeLerp);
+          const c3 = lerpColor([43,127,59],[31,40,55], themeLerp);
+          const grad = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+          grad.addColorStop(0, `rgb(${c1[0]},${c1[1]},${c1[2]})`);
+          grad.addColorStop(0.5, `rgb(${c2[0]},${c2[1]},${c2[2]})`);
+          grad.addColorStop(1, `rgb(${c3[0]},${c3[1]},${c3[2]})`);
+          ctx.fillStyle = grad;
+
+          ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+          const lipColor = `rgba(${Math.floor(217 - 60*themeLerp)},${Math.floor(255 - 60*themeLerp)},${Math.floor(212 - 60*themeLerp)},${1 - 0.4*themeLerp})`;
+          ctx.fillStyle = lipColor;
+          ctx.fillRect(p.x - 3, p.top - 16, PIPE_WIDTH + 6, 16);
+
+          const bottomH = BASE_H - FLOOR_HEIGHT - (p.top + PIPE_GAP);
+          ctx.fillStyle = grad;
+          ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
+          ctx.fillStyle = lipColor;
+          ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+
+          if (p.moving) {
+            ctx.fillStyle = "rgba(255,255,255,0.35)";
+            ctx.fillRect(p.x + PIPE_WIDTH/2 - 4, p.top - 22, 8, 8);
+          }
         }
       }
     }
 
     function drawGround() {
-      const groundCol = lerpColor([212,170,99],[47,43,50], themeLerp);
-      ctx.fillStyle = `rgb(${groundCol[0]},${groundCol[1]},${groundCol[2]})`;
-      ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, FLOOR_HEIGHT);
+      if (activeSkin === "fish") {
+        // seabed
+        ctx.fillStyle = "#0f3f39";
+        ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, FLOOR_HEIGHT);
+        // sand
+        ctx.fillStyle = "#155e75";
+        ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, 10);
+        // seaweed
+        ctx.strokeStyle = "rgba(22,163,74,0.9)";
+        ctx.lineWidth = 3;
+        for (let x = 10; x < BASE_W; x += 32) {
+          ctx.beginPath();
+          ctx.moveTo(x, BASE_H - 6);
+          ctx.quadraticCurveTo(x - 6, BASE_H - 26, x + 4, BASE_H - 46);
+          ctx.stroke();
+        }
+      } else {
+        const groundCol = lerpColor([212,170,99],[47,43,50], themeLerp);
+        ctx.fillStyle = `rgb(${groundCol[0]},${groundCol[1]},${groundCol[2]})`;
+        ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, FLOOR_HEIGHT);
 
-      const grassCol = lerpColor([99,184,64],[63,95,72], themeLerp);
-      ctx.fillStyle = `rgb(${grassCol[0]},${grassCol[1]},${grassCol[2]})`;
-      ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, 14);
+        const grassCol = lerpColor([99,184,64],[63,95,72], themeLerp);
+        ctx.fillStyle = `rgb(${grassCol[0]},${grassCol[1]},${grassCol[2]})`;
+        ctx.fillRect(0, BASE_H - FLOOR_HEIGHT, BASE_W, 14);
 
-      const patternAlpha = 0.1 - 0.06 * themeLerp;
-      ctx.fillStyle = `rgba(0,0,0,${Math.max(patternAlpha,0)})`;
-      for (let x = groundOffset; x < BASE_W + 72; x += 72) {
-        ctx.fillRect(x, BASE_H - FLOOR_HEIGHT + 16, 48, 14);
+        const patternAlpha = 0.1 - 0.06 * themeLerp;
+        ctx.fillStyle = `rgba(0,0,0,${Math.max(patternAlpha,0)})`;
+        for (let x = groundOffset; x < BASE_W + 72; x += 72) {
+          ctx.fillRect(x, BASE_H - FLOOR_HEIGHT + 16, 48, 14);
+        }
       }
     }
 
@@ -942,6 +1170,75 @@
       ctx.fill();
     }
 
+    function drawSkinFish() {
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      ctx.beginPath();
+      ctx.ellipse(0, 10, 16, 5.5, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#000";
+      ctx.fill();
+      ctx.restore();
+
+      // body
+      const bodyGrad = ctx.createLinearGradient(-18, -10, 20, 10);
+      bodyGrad.addColorStop(0, "#38bdf8");
+      bodyGrad.addColorStop(0.4, "#0ea5e9");
+      bodyGrad.addColorStop(1, "#0369a1");
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 19, 13, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // stripes
+      ctx.strokeStyle = "rgba(240,253,250,0.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-6, -9);
+      ctx.lineTo(-10, -12);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-2, 9);
+      ctx.lineTo(-8, 13);
+      ctx.stroke();
+
+      // tail
+      ctx.fillStyle = "rgba(125,211,252,0.85)";
+      ctx.beginPath();
+      ctx.moveTo(-16, 0);
+      ctx.lineTo(-28, -6);
+      ctx.lineTo(-28, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      // fin top
+      ctx.fillStyle = "rgba(59,130,246,0.8)";
+      ctx.beginPath();
+      ctx.moveTo(-4, -10);
+      ctx.lineTo(2, -18);
+      ctx.lineTo(7, -10);
+      ctx.closePath();
+      ctx.fill();
+
+      // fin bottom
+      ctx.beginPath();
+      ctx.moveTo(-4, 10);
+      ctx.lineTo(2, 18);
+      ctx.lineTo(7, 10);
+      ctx.closePath();
+      ctx.fill();
+
+      // eye
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(9, -2, 3.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.arc(10, -2, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     function drawBird() {
       ctx.save();
       ctx.translate(bird.x, bird.y);
@@ -958,6 +1255,8 @@
         drawSkinGhost();
       } else if (activeSkin === "plane") {
         drawSkinPlane();
+      } else if (activeSkin === "fish") {
+        drawSkinFish();
       } else {
         drawSkinBird();
       }
@@ -1011,17 +1310,17 @@
       ctx.globalAlpha = 1;
     }
 
-    // meters display (moved lower so it doesn't overlap HUD)
+    // meters display (for gameplay/home only)
     function drawMeters() {
       const metersNow = Math.floor(score / 2) * 100;
       ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.beginPath();
-      ctx.roundRect(BASE_W/2 - 80, 50, 160, 34, 14);
+      ctx.roundRect(BASE_W/2 - 80, 66, 160, 32, 14);
       ctx.fill();
       ctx.fillStyle = "#fff";
       ctx.font = "13px system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(metersNow + " m", BASE_W/2, 72);
+      ctx.fillText(metersNow + " m", BASE_W/2, 87);
       ctx.textAlign = "left";
     }
 
@@ -1108,6 +1407,11 @@
       return rects;
     }
 
+    function getStoreBackButton() {
+      // inside store panel
+      return { x: BASE_W - 40 - 30, y: 60, w: 30, h: 26 };
+    }
+
     function onStoreSelect(skin) {
       if (skin.unlockMeters && maxMetersReached < skin.unlockMeters) {
         return;
@@ -1118,11 +1422,22 @@
           ownedSkins[skin.id] = true;
           activeSkin = skin.id;
           saveProgress();
+        } else {
+          return;
         }
       } else {
         activeSkin = skin.id;
         saveProgress();
       }
+
+      // change music mode based on skin
+      if (activeSkin === "fish") {
+        musicMode = "sea";
+        initSea();
+      } else {
+        musicMode = "pop";
+      }
+      startMusicIfNeeded();
     }
 
     function drawStore() {
@@ -1131,10 +1446,22 @@
       ctx.roundRect(20, 55, BASE_W - 40, BASE_H - 110, 22);
       ctx.fill();
 
+      // title
       ctx.fillStyle = "#fff";
       ctx.font = "bold 20px system-ui, sans-serif";
       ctx.fillText("STORE", 130, 82);
 
+      // back button
+      const backBtn = getStoreBackButton();
+      ctx.fillStyle = "rgba(15,23,42,0.78)";
+      ctx.beginPath();
+      ctx.roundRect(backBtn.x, backBtn.y, backBtn.w, backBtn.h, 6);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "14px system-ui, sans-serif";
+      ctx.fillText("←", backBtn.x + 7, backBtn.y + 18);
+
+      // info
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillStyle = "rgba(255,255,255,0.7)";
       ctx.fillText("Coins: " + totalCoins, 24, 100);
@@ -1156,11 +1483,11 @@
         ctx.save();
         ctx.translate(x + 30, y + 36);
         const prevSkin = activeSkin;
+        const prevBird = bird;
         activeSkin = skin.id;
-        const oldBird = bird;
         bird = { x: 0, y: 0, anim: performance.now()*0.0001 };
         drawBird();
-        bird = oldBird;
+        bird = prevBird;
         activeSkin = prevSkin;
         ctx.restore();
 
@@ -1191,7 +1518,7 @@
 
       ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText("ESC to go back", 32, BASE_H - 30);
+      ctx.fillText("tap back to return", 32, BASE_H - 30);
     }
 
     function drawGameOver() {
@@ -1248,10 +1575,10 @@
 
       if (gameState === "home") {
         drawHomeScreen();
-        drawMeters();
+        drawMeters(); // safe: home panel starts at 110
       } else if (gameState === "playing") {
         drawHUD();
-        drawMeters();
+        drawMeters(); // placed at y=66, not overlapping
       } else if (gameState === "paused") {
         drawHUD();
         drawMeters();
@@ -1265,8 +1592,8 @@
         drawMeters();
         drawGameOver();
       } else if (gameState === "store") {
+        // store has its own layout; no meters here to avoid overlap
         drawStore();
-        drawMeters();
       }
 
       requestAnimationFrame(loop);
