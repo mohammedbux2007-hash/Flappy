@@ -93,6 +93,7 @@
     window.addEventListener("resize", fitCanvas);
     fitCanvas();
 
+    // game states: "home", "playing", "paused", "gameover", "store"
     let gameState = "home";
 
     const GRAVITY = 0.29;
@@ -104,6 +105,17 @@
     const SCROLL_SPEED = 1.8;
     const HITBOX_SHRINK = 0.7;
 
+    // skins/store
+    const SKINS = [
+      { id: "bird", name: "Classic Bird", price: 0, unlockMeters: 0 },
+      { id: "skeleton", name: "Skeleton Bird", price: 100, unlockMeters: 0 },
+      { id: "ghost", name: "Ghost", price: 250, unlockMeters: 0 },
+      { id: "plane", name: "Aeroplane", price: 0, unlockMeters: 500 }
+    ];
+    let activeSkin = "bird";
+    let ownedSkins = { bird: true };
+    let maxMetersReached = 0;
+
     let themeLerp = 0;
     let themeTarget = 0;
     const THEME_LERP_SPEED = 0.08;
@@ -114,6 +126,12 @@
     let totalCoins = 0;
     let particles = [];
 
+    // buttons (home screen)
+    const homeButtons = {
+      play: { x: 90, y: 220, w: 180, h: 50 },
+      store: { x: 130, y: 284, w: 100, h: 38 }
+    };
+
     // audio
     let audioCtx = null;
     let musicGain = null;
@@ -123,12 +141,35 @@
     const pauseBtn = document.getElementById("pauseBtn");
     const muteBtn = document.getElementById("muteBtn");
 
+    // load from localStorage
     try {
       const savedCoins = localStorage.getItem("flappyCoins");
       if (savedCoins !== null) totalCoins = parseInt(savedCoins, 10) || 0;
       const savedBest = localStorage.getItem("flappyBest");
       if (savedBest !== null) best = parseInt(savedBest, 10) || 0;
+      const savedSkins = localStorage.getItem("flappyOwnedSkins");
+      if (savedSkins) {
+        ownedSkins = JSON.parse(savedSkins);
+      }
+      const savedActive = localStorage.getItem("flappyActiveSkin");
+      if (savedActive) {
+        activeSkin = savedActive;
+      }
+      const savedMeters = localStorage.getItem("flappyMaxMeters");
+      if (savedMeters) {
+        maxMetersReached = parseInt(savedMeters, 10) || 0;
+      }
     } catch(e) {}
+
+    function saveProgress() {
+      try {
+        localStorage.setItem("flappyCoins", totalCoins.toString());
+        localStorage.setItem("flappyBest", best.toString());
+        localStorage.setItem("flappyOwnedSkins", JSON.stringify(ownedSkins));
+        localStorage.setItem("flappyActiveSkin", activeSkin);
+        localStorage.setItem("flappyMaxMeters", maxMetersReached.toString());
+      } catch(e) {}
+    }
 
     function initClouds() {
       bgClouds = [];
@@ -181,7 +222,7 @@
         moving: canMove,
         amp: canMove ? (18 + Math.random() * 18) : 0,
         phase: Math.random() * Math.PI * 2,
-        speed: 0.0018 + Math.random() * 0.0013 // slightly different speeds
+        speed: 0.0018 + Math.random() * 0.0013
       });
 
       if (Math.random() < 0.45) {
@@ -209,7 +250,7 @@
         resetGame(true);
         return;
       }
-      if (gameState === "paused") {
+      if (gameState === "paused" || gameState === "store") {
         return;
       }
       bird.vy = FLAP;
@@ -225,16 +266,16 @@
       musicGain.gain.value = 0.48;
       musicGain.connect(audioCtx.destination);
 
-      // simple pop-ish loop: kick (sub), snare-ish noise, lead notes
+      // beat: simple pop-ish
       const tempo = 110;
-      const beat = 60 / tempo;      // quarter
-      const bar = beat * 4;         // 4/4 bar
+      const beat = 60 / tempo;
+      const bar = beat * 4;
 
       function scheduleBeat(startTime) {
         for (let i = 0; i < 4; i++) {
           const t = startTime + i * beat;
 
-          // kick: sine + short
+          // kick
           const kick = audioCtx.createOscillator();
           kick.type = "sine";
           const kickGain = audioCtx.createGain();
@@ -246,7 +287,7 @@
           kick.start(t);
           kick.stop(t + 0.3);
 
-          // snare on beats 2 and 4
+          // snare
           if (i === 1 || i === 3) {
             const snare = audioCtx.createBufferSource();
             const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
@@ -262,7 +303,7 @@
             snare.start(t);
           }
 
-          // lead notes on offbeats
+          // lead
           const notes = [262, 330, 392, 523];
           if (i % 2 === 0) {
             const lead = audioCtx.createOscillator();
@@ -278,7 +319,6 @@
           }
         }
 
-        // reschedule next bar
         setTimeout(() => {
           if (!muted) scheduleBeat(audioCtx.currentTime + 0.05);
         }, bar * 1000);
@@ -294,7 +334,42 @@
       tapHandler(e.touches ? e.touches[0] : e);
     }, {passive:false});
 
+    function pointInRect(px, py, rect) {
+      return px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h;
+    }
+
     function tapHandler(e) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) * (BASE_W / rect.width);
+      const my = (e.clientY - rect.top) * (BASE_H / rect.height);
+
+      if (gameState === "home") {
+        if (pointInRect(mx, my, homeButtons.play)) {
+          startPlaying();
+          return;
+        }
+        if (pointInRect(mx, my, homeButtons.store)) {
+          gameState = "store";
+          return;
+        }
+        // else ignore
+        return;
+      }
+
+      if (gameState === "store") {
+        // detect click on skin cards
+        const storeRects = getStoreRects();
+        for (let s of storeRects) {
+          if (pointInRect(mx, my, s.rect)) {
+            onStoreSelect(s.skin);
+            return;
+          }
+        }
+        // click outside -> go home
+        // gameState = "home";  // we can leave it in store till they back
+        return;
+      }
+
       flap();
     }
 
@@ -304,6 +379,9 @@
       }
       if (e.code === "KeyP") togglePause();
       if (e.code === "KeyM") toggleMute();
+      if (e.code === "Escape" && gameState === "store") {
+        gameState = "home";
+      }
     });
 
     pauseBtn.addEventListener("click", () => {
@@ -361,10 +439,7 @@
 
     function die() {
       gameState = "gameover";
-      try {
-        localStorage.setItem("flappyCoins", totalCoins.toString());
-        localStorage.setItem("flappyBest", best.toString());
-      } catch(e) {}
+      saveProgress();
       pauseBtn.textContent = "II";
     }
 
@@ -378,9 +453,11 @@
       }
       particles = particles.filter(p => p.life > 0);
 
-      if (gameState === "home") {
+      if (gameState === "home" || gameState === "store") {
         moveClouds(dt);
-        bird.y = BASE_H/2 + Math.sin(now * 0.004) * 8;
+        if (gameState === "home") {
+          bird.y = BASE_H/2 + Math.sin(now * 0.004) * 8;
+        }
         return;
       }
       if (gameState === "paused") {
@@ -392,6 +469,7 @@
         return;
       }
 
+      // playing
       themeTarget = getThemeTargetFromScore(score);
       themeLerp += (themeTarget - themeLerp) * THEME_LERP_SPEED;
 
@@ -410,7 +488,6 @@
         // vertical wiggle for moving pipes
         if (p.moving) {
           p.top = p.baseTop + Math.sin(now * p.speed + p.phase) * p.amp;
-          // clamp so gap doesn't go below floor or off-screen
           const maxTop = BASE_H - FLOOR_HEIGHT - 100;
           const minTop = 40;
           if (p.top > maxTop) p.top = maxTop;
@@ -442,7 +519,7 @@
           c.collected = true;
           totalCoins += 1;
           spawnCoinBurst(c.x, c.y);
-          try { localStorage.setItem("flappyCoins", totalCoins.toString()); } catch(e){}
+          saveProgress();
         }
       }
 
@@ -461,6 +538,13 @@
           p.passed = true;
           score++;
           if (score > best) best = score;
+
+          // meters
+          const metersNow = Math.floor(score / 2) * 100;
+          if (metersNow > maxMetersReached) {
+            maxMetersReached = metersNow;
+            saveProgress();
+          }
         }
       }
 
@@ -477,9 +561,8 @@
       ];
     }
 
-    // prettier, less "computer" background
+    // background
     function drawBackground() {
-      // sky
       const daySkyTop = [151, 216, 255];
       const daySkyBot = [219, 243, 255];
       const sunsetTop = [253, 183, 144];
@@ -494,7 +577,6 @@
       ctx.fillStyle = grad;
       ctx.fillRect(0,0,BASE_W,BASE_H);
 
-      // sun
       const sunY = 80 + 40 * themeLerp;
       ctx.fillStyle = `rgba(255,245,220,${0.9 - 0.4*themeLerp})`;
       ctx.beginPath();
@@ -554,7 +636,6 @@
         ctx.fillStyle = lipColor;
         ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
 
-        // mark moving pipes subtly
         if (p.moving) {
           ctx.fillStyle = "rgba(255,255,255,0.35)";
           ctx.fillRect(p.x + PIPE_WIDTH/2 - 4, p.top - 22, 8, 8);
@@ -581,11 +662,27 @@
     function drawBird() {
       ctx.save();
       ctx.translate(bird.x, bird.y);
-      const tilt = (gameState === "home")
+      const tilt = (gameState === "home" || gameState === "store")
         ? Math.sin(performance.now() * 0.004) * 0.15
         : Math.min(Math.max(bird.vy / 10, -0.45), 0.6);
       ctx.rotate(tilt);
 
+      if (activeSkin === "bird") {
+        drawSkinBird();
+      } else if (activeSkin === "skeleton") {
+        drawSkinSkeleton();
+      } else if (activeSkin === "ghost") {
+        drawSkinGhost();
+      } else if (activeSkin === "plane") {
+        drawSkinPlane();
+      } else {
+        drawSkinBird();
+      }
+
+      ctx.restore();
+    }
+
+    function drawSkinBird() {
       const base1 = lerpColor([255,217,102],[255,226,168], themeLerp);
       const base2 = lerpColor([255,174,0],[255,193,78], themeLerp);
       const wingCol = lerpColor([255,233,168],[255,244,216], themeLerp);
@@ -630,8 +727,99 @@
       ctx.lineTo(18, 6);
       ctx.closePath();
       ctx.fill();
+    }
 
-      ctx.restore();
+    function drawSkinSkeleton() {
+      // pale bone body
+      ctx.fillStyle = "#f4f4f5";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // "rib" stripes
+      ctx.strokeStyle = "rgba(0,0,0,0.28)";
+      ctx.lineWidth = 1;
+      for (let i = -7; i <= 7; i += 4) {
+        ctx.beginPath();
+        ctx.moveTo(-10, i);
+        ctx.lineTo(10, i);
+        ctx.stroke();
+      }
+
+      // eye sockets
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(6, -4, 3.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(12, -4, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // beak-ish (bone peak)
+      ctx.fillStyle = "#d4d4d8";
+      ctx.beginPath();
+      ctx.moveTo(16, 0);
+      ctx.lineTo(28, 1);
+      ctx.lineTo(16, 6);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawSkinGhost() {
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 18, 18, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // tail
+      ctx.beginPath();
+      ctx.moveTo(-12, 10);
+      ctx.quadraticCurveTo(0, 18, 12, 10);
+      ctx.quadraticCurveTo(0, 20, -12, 10);
+      ctx.fill();
+
+      // eyes
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.arc(-4, -2, 2, 0, Math.PI * 2);
+      ctx.arc(4, -2, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawSkinPlane() {
+      // body
+      ctx.fillStyle = "#eff6ff";
+      ctx.beginPath();
+      ctx.roundRect(-22, -6, 44, 12, 6);
+      ctx.fill();
+
+      // nose
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.roundRect(15, -6, 12, 12, 6);
+      ctx.fill();
+
+      // wings
+      ctx.fillStyle = "rgba(148,163,184,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(-6, -6);
+      ctx.lineTo(-18, -14);
+      ctx.lineTo(0, -6);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(-6, 6);
+      ctx.lineTo(-18, 14);
+      ctx.lineTo(0, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      // window
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.arc(4, -1, 2, 0, Math.PI * 2);
+      ctx.fill();
     }
 
     function drawCoins() {
@@ -680,6 +868,19 @@
       ctx.globalAlpha = 1;
     }
 
+    function drawMeters() {
+      const metersNow = Math.floor(score / 2) * 100;
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.beginPath();
+      ctx.roundRect(BASE_W/2 - 80, 8, 160, 34, 14);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(metersNow + " m", BASE_W/2, 30);
+      ctx.textAlign = "left";
+    }
+
     function drawHUD() {
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.beginPath();
@@ -699,23 +900,161 @@
     function drawHomeScreen() {
       ctx.fillStyle = "rgba(2,6,23,0.35)";
       ctx.beginPath();
-      ctx.roundRect(40, 120, BASE_W - 80, 260, 22);
+      ctx.roundRect(40, 110, BASE_W - 80, 290, 22);
       ctx.fill();
 
       ctx.fillStyle = "#fff";
       ctx.font = "bold 30px system-ui, sans-serif";
-      ctx.fillText("FLAPPY", 112, 160);
-      ctx.font = "14px system-ui, sans-serif";
-      ctx.fillText("tap to start", 132, 188);
+      ctx.fillText("FLAPPY+", 112, 150);
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("coins: " + totalCoins, 115, 174);
+      ctx.fillText("best: " + best, 115, 190);
+      ctx.fillText("max m: " + maxMetersReached, 115, 206);
+
+      // play button
+      ctx.fillStyle = "linear-gradient(0)";
+      const pb = homeButtons.play;
+      const pGrad = ctx.createLinearGradient(pb.x, pb.y, pb.x + pb.w, pb.y + pb.h);
+      pGrad.addColorStop(0, "#38bdf8");
+      pGrad.addColorStop(1, "#0ea5e9");
+      ctx.fillStyle = pGrad;
+      ctx.beginPath();
+      ctx.roundRect(pb.x, pb.y, pb.w, pb.h, 16);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "15px system-ui, sans-serif";
+      ctx.fillText("PLAY", pb.x + 68, pb.y + 30);
+
+      // store button with cart
+      const sb = homeButtons.store;
+      ctx.fillStyle = "rgba(15,23,42,0.55)";
+      ctx.beginPath();
+      ctx.roundRect(sb.x, sb.y, sb.w, sb.h, 14);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("🛒 Store", sb.x + 14, sb.y + 24);
+
+      // hint
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText("tap PLAY to start, or buy skins.", 66, 332);
+    }
+
+    function getStoreRects() {
+      // layout 2 x 2
+      const rects = [];
+      const startX = 36;
+      const startY = 110;
+      const w = 140;
+      const h = 90;
+      const padX = 16;
+      const padY = 14;
+
+      for (let i = 0; i < SKINS.length; i++) {
+        const row = Math.floor(i / 2);
+        const col = i % 2;
+        rects.push({
+          skin: SKINS[i],
+          rect: {
+            x: startX + col * (w + padX),
+            y: startY + row * (h + padY),
+            w: w,
+            h: h
+          }
+        });
+      }
+      return rects;
+    }
+
+    function onStoreSelect(skin) {
+      // if locked by meters
+      if (skin.unlockMeters && maxMetersReached < skin.unlockMeters) {
+        // not enough meters, ignore
+        return;
+      }
+      // if not owned and has price
+      if (!ownedSkins[skin.id]) {
+        if (totalCoins >= skin.price) {
+          totalCoins -= skin.price;
+          ownedSkins[skin.id] = true;
+          activeSkin = skin.id;
+          saveProgress();
+        }
+      } else {
+        // already owned -> equip
+        activeSkin = skin.id;
+        saveProgress();
+      }
+    }
+
+    function drawStore() {
+      ctx.fillStyle = "rgba(15,23,42,0.6)";
+      ctx.beginPath();
+      ctx.roundRect(20, 55, BASE_W - 40, BASE_H - 110, 22);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 20px system-ui, sans-serif";
+      ctx.fillText("STORE", 130, 82);
 
       ctx.font = "12px system-ui, sans-serif";
-      ctx.fillText("score: " + score, 132, 212);
-      ctx.fillText("best: " + best, 132, 230);
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillText("Coins: " + totalCoins, 24, 100);
+      ctx.fillText("Max meters: " + maxMetersReached, 170, 100);
 
+      const storeRects = getStoreRects();
+      for (let s of storeRects) {
+        const { x, y, w, h } = s.rect;
+        const skin = s.skin;
+        const owned = !!ownedSkins[skin.id];
+        const lockedByMeters = skin.unlockMeters && maxMetersReached < skin.unlockMeters;
+
+        ctx.fillStyle = owned ? "rgba(148,163,184,0.2)" : "rgba(15,23,42,0.35)";
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, 14);
+        ctx.fill();
+
+        // preview bubble
+        ctx.save();
+        ctx.translate(x + 30, y + 36);
+        const prevBird = { x: 0, y: 0 };
+        const prevSkin = activeSkin;
+        activeSkin = skin.id;
+        bird = { x: 0, y: 0, anim: performance.now()*0.0001 };
+        drawBird();
+        activeSkin = prevSkin;
+        ctx.restore();
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "13px system-ui, sans-serif";
+        ctx.fillText(skin.name, x + 60, y + 26);
+
+        ctx.font = "11px system-ui, sans-serif";
+        if (skin.id === "plane") {
+          ctx.fillStyle = lockedByMeters ? "rgba(248,113,113,0.9)" : "rgba(190,242,100,0.9)";
+          ctx.fillText("Unlock: " + skin.unlockMeters + "m", x + 60, y + 44);
+        } else if (skin.price > 0) {
+          ctx.fillStyle = owned ? "rgba(190,242,100,0.9)" : "rgba(248,250,252,0.8)";
+          ctx.fillText("Price: " + skin.price + " coins", x + 60, y + 44);
+        } else {
+          ctx.fillStyle = "rgba(190,242,100,0.9)";
+          ctx.fillText("Free", x + 60, y + 44);
+        }
+
+        ctx.fillStyle = owned ? "rgba(34,197,94,1)" : (lockedByMeters ? "rgba(248,113,113,0.9)" : "rgba(59,130,246,0.9)");
+        ctx.beginPath();
+        ctx.roundRect(x + 60, y + 56, 60, 20, 8);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "10px system-ui, sans-serif";
+        ctx.fillText(owned ? "Use" : (lockedByMeters ? "Locked" : "Buy"), x + 74, y + 70);
+      }
+
+      // back hint
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fillText("collect coins. avoid pipes.", 95, 260);
-      ctx.fillText("auto-fit to screen, no distortion.", 78, 280);
+      ctx.fillText("tap anywhere outside cards to stay, ESC to exit", 32, BASE_H - 30);
     }
 
     function drawGameOver() {
@@ -739,6 +1078,7 @@
       ctx.fillText("Score: " + score, cx + 30, cy + 78);
       ctx.fillText("Best: " + best, cx + 30, cy + 100);
       ctx.fillText("Coins: " + totalCoins, cx + 30, cy + 122);
+      ctx.fillText("Max m: " + maxMetersReached, cx + 30, cy + 144);
 
       const bw = cardW - 50, bh = 44;
       const bx = cx + 25, by = cy + 134;
@@ -771,10 +1111,13 @@
 
       if (gameState === "home") {
         drawHomeScreen();
+        drawMeters();
       } else if (gameState === "playing") {
         drawHUD();
+        drawMeters();
       } else if (gameState === "paused") {
         drawHUD();
+        drawMeters();
         ctx.fillStyle = "rgba(0,0,0,0.4)";
         ctx.fillRect(0, 0, BASE_W, BASE_H);
         ctx.fillStyle = "#fff";
@@ -782,7 +1125,11 @@
         ctx.fillText("PAUSED", 108, BASE_H/2);
       } else if (gameState === "gameover") {
         drawHUD();
+        drawMeters();
         drawGameOver();
+      } else if (gameState === "store") {
+        drawStore();
+        drawMeters();
       }
 
       requestAnimationFrame(loop);
