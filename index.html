@@ -93,7 +93,7 @@
     window.addEventListener("resize", fitCanvas);
     fitCanvas();
 
-    // game states: "home", "playing", "paused", "gameover", "store"
+    // states: "home", "playing", "paused", "gameover", "store"
     let gameState = "home";
 
     const GRAVITY = 0.29;
@@ -126,7 +126,7 @@
     let totalCoins = 0;
     let particles = [];
 
-    // buttons (home screen)
+    // home buttons
     const homeButtons = {
       play: { x: 90, y: 220, w: 180, h: 50 },
       store: { x: 130, y: 284, w: 100, h: 38 }
@@ -212,7 +212,6 @@
       const maxTop = BASE_H - FLOOR_HEIGHT - 100;
       const minTop = 60;
       const topHeight = Math.floor(Math.random() * (maxTop - minTop) + minTop);
-      // moving pipes only after score > 10, and not all of them
       const canMove = score > 10 && Math.random() < 0.35;
       pipes.push({
         x: BASE_W,
@@ -266,7 +265,6 @@
       musicGain.gain.value = 0.48;
       musicGain.connect(audioCtx.destination);
 
-      // beat: simple pop-ish
       const tempo = 110;
       const beat = 60 / tempo;
       const bar = beat * 4;
@@ -287,7 +285,7 @@
           kick.start(t);
           kick.stop(t + 0.3);
 
-          // snare
+          // snare (2 and 4)
           if (i === 1 || i === 3) {
             const snare = audioCtx.createBufferSource();
             const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
@@ -352,12 +350,10 @@
           gameState = "store";
           return;
         }
-        // else ignore
         return;
       }
 
       if (gameState === "store") {
-        // detect click on skin cards
         const storeRects = getStoreRects();
         for (let s of storeRects) {
           if (pointInRect(mx, my, s.rect)) {
@@ -365,8 +361,6 @@
             return;
           }
         }
-        // click outside -> go home
-        // gameState = "home";  // we can leave it in store till they back
         return;
       }
 
@@ -483,9 +477,7 @@
       }
 
       for (let p of pipes) {
-        // horizontal
         p.x -= SCROLL_SPEED;
-        // vertical wiggle for moving pipes
         if (p.moving) {
           p.top = p.baseTop + Math.sin(now * p.speed + p.phase) * p.amp;
           const maxTop = BASE_H - FLOOR_HEIGHT - 100;
@@ -539,7 +531,6 @@
           score++;
           if (score > best) best = score;
 
-          // meters
           const metersNow = Math.floor(score / 2) * 100;
           if (metersNow > maxMetersReached) {
             maxMetersReached = metersNow;
@@ -659,6 +650,298 @@
       }
     }
 
+    // prettier skins
+    function drawSkinBird() {
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      ctx.beginPath();
+      ctx.ellipse(1, 10, 16, 6, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#000";
+      ctx.fill();
+      ctx.restore();
+
+      // body
+      const bodyGrad = ctx.createLinearGradient(-16, -16, 20, 16);
+      bodyGrad.addColorStop(0, "#ffe28a");
+      bodyGrad.addColorStop(0.6, "#ffb347");
+      bodyGrad.addColorStop(1, "#ff9447");
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.stroke();
+
+      // belly highlight
+      const belly = ctx.createRadialGradient(-6, 4, 0, -6, 4, 15);
+      belly.addColorStop(0, "rgba(255,255,255,0.7)");
+      belly.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = belly;
+      ctx.beginPath();
+      ctx.ellipse(-4, 3, 12, 9, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+
+      // wing
+      const wingOffset = Math.sin(bird.anim * 8) * 4;
+      ctx.save();
+      ctx.translate(-6, 3 + wingOffset);
+      ctx.rotate(-0.2);
+      const wingGrad = ctx.createLinearGradient(-10, -6, 12, 6);
+      wingGrad.addColorStop(0, "#fff3d9");
+      wingGrad.addColorStop(1, "#f4c47e");
+      ctx.fillStyle = wingGrad;
+      ctx.beginPath();
+      ctx.roundRect(-11, -7, 22, 14, 8);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.12)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+
+      // eye
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(9, -6, 5.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(11, -6, 2.7, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.beginPath();
+      ctx.arc(10, -7, 1, 0, Math.PI * 2);
+      ctx.fill();
+
+      // cheek
+      ctx.fillStyle = "rgba(255,99,132,0.4)";
+      ctx.beginPath();
+      ctx.arc(-2, 5, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // beak
+      const beakGrad = ctx.createLinearGradient(18, -2, 34, 4);
+      beakGrad.addColorStop(0, "#ffeb99");
+      beakGrad.addColorStop(1, "#ffb347");
+      ctx.fillStyle = beakGrad;
+      ctx.beginPath();
+      ctx.moveTo(18, -2);
+      ctx.lineTo(34, 2);
+      ctx.lineTo(18, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.2)";
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+    }
+
+    function drawSkinSkeleton() {
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      ctx.beginPath();
+      ctx.ellipse(1, 10, 15, 5, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#000";
+      ctx.fill();
+      ctx.restore();
+
+      // skull body
+      const skullGrad = ctx.createLinearGradient(-16, -16, 20, 18);
+      skullGrad.addColorStop(0, "#ffffff");
+      skullGrad.addColorStop(1, "#d1d5db");
+      ctx.fillStyle = skullGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 19, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      // crack
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 0.7;
+      ctx.beginPath();
+      ctx.moveTo(-6, -7);
+      ctx.lineTo(-2, -9);
+      ctx.lineTo(1, -6);
+      ctx.stroke();
+
+      // eye hole
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.arc(6, -3, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(255,255,255,0.4)";
+      ctx.beginPath();
+      ctx.arc(4.5, -4.2, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // teeth
+      ctx.fillStyle = "#e5e7eb";
+      ctx.beginPath();
+      ctx.roundRect(-4, 4, 9, 5, 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.25)";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-1, 4);
+      ctx.lineTo(-1, 9);
+      ctx.moveTo(2, 4);
+      ctx.lineTo(2, 9);
+      ctx.stroke();
+
+      // bony wing
+      const wingOff = Math.sin(bird.anim * 7) * 3;
+      ctx.save();
+      ctx.translate(-8, 3 + wingOff);
+      ctx.fillStyle = "#f3f4f6";
+      ctx.beginPath();
+      ctx.roundRect(-10, -5, 20, 10, 5);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.15)";
+      ctx.stroke();
+      ctx.restore();
+
+      // bone beak
+      ctx.fillStyle = "#d4d4d8";
+      ctx.beginPath();
+      ctx.moveTo(15, -1);
+      ctx.lineTo(28, 1);
+      ctx.lineTo(15, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.15)";
+      ctx.stroke();
+    }
+
+    function drawSkinGhost() {
+      // glow
+      const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 26);
+      glow.addColorStop(0, "rgba(255,255,255,0.9)");
+      glow.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, 26, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // body
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 15, 17, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // bottom waves
+      ctx.beginPath();
+      ctx.moveTo(-15, 6);
+      ctx.quadraticCurveTo(-8, 14, -4, 8);
+      ctx.quadraticCurveTo(0, 14, 4, 8);
+      ctx.quadraticCurveTo(8, 14, 15, 6);
+      ctx.lineTo(15, 16);
+      ctx.lineTo(-15, 16);
+      ctx.closePath();
+      ctx.fill();
+
+      // eyes
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.arc(-4, -3, 2.4, 0, Math.PI * 2);
+      ctx.arc(4, -3, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // mouth
+      ctx.beginPath();
+      ctx.arc(0, 3, 3.2, 0, Math.PI);
+      ctx.fillStyle = "rgba(15,23,42,0.8)";
+      ctx.fill();
+
+      // outline
+      ctx.strokeStyle = "rgba(148,163,184,0.35)";
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 15, 17, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawSkinPlane() {
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.25;
+      ctx.beginPath();
+      ctx.ellipse(0, 9, 20, 6, 0, 0, Math.PI * 2);
+      ctx.fillStyle = "#000";
+      ctx.fill();
+      ctx.restore();
+
+      // main body
+      const body = ctx.createLinearGradient(-24, 0, 28, 0);
+      body.addColorStop(0, "#e2e8f0");
+      body.addColorStop(0.5, "#ffffff");
+      body.addColorStop(1, "#cbd5f5");
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.roundRect(-24, -6, 48, 12, 6);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(15,23,42,0.45)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // nose
+      ctx.fillStyle = "#38bdf8";
+      ctx.beginPath();
+      ctx.roundRect(16, -6, 14, 12, 6);
+      ctx.fill();
+
+      // top wing
+      ctx.fillStyle = "rgba(148,163,184,0.95)";
+      ctx.beginPath();
+      ctx.moveTo(-8, -6);
+      ctx.lineTo(-20, -16);
+      ctx.lineTo(4, -6);
+      ctx.closePath();
+      ctx.fill();
+
+      // bottom wing
+      ctx.beginPath();
+      ctx.moveTo(-8, 6);
+      ctx.lineTo(-20, 16);
+      ctx.lineTo(4, 6);
+      ctx.closePath();
+      ctx.fill();
+
+      // tail
+      ctx.fillStyle = "rgba(148,163,184,0.85)";
+      ctx.beginPath();
+      ctx.moveTo(-20, -6);
+      ctx.lineTo(-26, -16);
+      ctx.lineTo(-16, -6);
+      ctx.closePath();
+      ctx.fill();
+
+      // window
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      ctx.arc(6, -1, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // window gloss
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
+      ctx.beginPath();
+      ctx.arc(5.2, -1.6, 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     function drawBird() {
       ctx.save();
       ctx.translate(bird.x, bird.y);
@@ -680,146 +963,6 @@
       }
 
       ctx.restore();
-    }
-
-    function drawSkinBird() {
-      const base1 = lerpColor([255,217,102],[255,226,168], themeLerp);
-      const base2 = lerpColor([255,174,0],[255,193,78], themeLerp);
-      const wingCol = lerpColor([255,233,168],[255,244,216], themeLerp);
-      const cheekCol = lerpColor([255,120,120],[255,196,196], themeLerp);
-      const beakCol = lerpColor([255,123,26],[255,156,70], themeLerp);
-
-      const grd = ctx.createLinearGradient(-12, -16, 24, 16);
-      grd.addColorStop(0, `rgb(${base1[0]},${base1[1]},${base1[2]})`);
-      grd.addColorStop(1, `rgb(${base2[0]},${base2[1]},${base2[2]})`);
-      ctx.fillStyle = grd;
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      const wingOffset = Math.sin(bird.anim * 8) * 4;
-      ctx.save();
-      ctx.translate(-6, 4 + wingOffset);
-      ctx.fillStyle = `rgb(${wingCol[0]},${wingCol[1]},${wingCol[2]})`;
-      ctx.beginPath();
-      ctx.roundRect(-10, -6, 20, 12, 6);
-      ctx.fill();
-      ctx.restore();
-
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(9, -6, 5.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#000";
-      ctx.beginPath();
-      ctx.arc(11, -6, 2.4, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = `rgba(${cheekCol[0]},${cheekCol[1]},${cheekCol[2]},0.6)`;
-      ctx.beginPath();
-      ctx.arc(-3, 4, 3.6, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = `rgb(${beakCol[0]},${beakCol[1]},${beakCol[2]})`;
-      ctx.beginPath();
-      ctx.moveTo(18, -2);
-      ctx.lineTo(30, 2);
-      ctx.lineTo(18, 6);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    function drawSkinSkeleton() {
-      // pale bone body
-      ctx.fillStyle = "#f4f4f5";
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // "rib" stripes
-      ctx.strokeStyle = "rgba(0,0,0,0.28)";
-      ctx.lineWidth = 1;
-      for (let i = -7; i <= 7; i += 4) {
-        ctx.beginPath();
-        ctx.moveTo(-10, i);
-        ctx.lineTo(10, i);
-        ctx.stroke();
-      }
-
-      // eye sockets
-      ctx.fillStyle = "#000";
-      ctx.beginPath();
-      ctx.arc(6, -4, 3.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(12, -4, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-
-      // beak-ish (bone peak)
-      ctx.fillStyle = "#d4d4d8";
-      ctx.beginPath();
-      ctx.moveTo(16, 0);
-      ctx.lineTo(28, 1);
-      ctx.lineTo(16, 6);
-      ctx.closePath();
-      ctx.fill();
-    }
-
-    function drawSkinGhost() {
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 18, 18, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // tail
-      ctx.beginPath();
-      ctx.moveTo(-12, 10);
-      ctx.quadraticCurveTo(0, 18, 12, 10);
-      ctx.quadraticCurveTo(0, 20, -12, 10);
-      ctx.fill();
-
-      // eyes
-      ctx.fillStyle = "#0f172a";
-      ctx.beginPath();
-      ctx.arc(-4, -2, 2, 0, Math.PI * 2);
-      ctx.arc(4, -2, 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    function drawSkinPlane() {
-      // body
-      ctx.fillStyle = "#eff6ff";
-      ctx.beginPath();
-      ctx.roundRect(-22, -6, 44, 12, 6);
-      ctx.fill();
-
-      // nose
-      ctx.fillStyle = "#38bdf8";
-      ctx.beginPath();
-      ctx.roundRect(15, -6, 12, 12, 6);
-      ctx.fill();
-
-      // wings
-      ctx.fillStyle = "rgba(148,163,184,0.9)";
-      ctx.beginPath();
-      ctx.moveTo(-6, -6);
-      ctx.lineTo(-18, -14);
-      ctx.lineTo(0, -6);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.moveTo(-6, 6);
-      ctx.lineTo(-18, 14);
-      ctx.lineTo(0, 6);
-      ctx.closePath();
-      ctx.fill();
-
-      // window
-      ctx.fillStyle = "#0f172a";
-      ctx.beginPath();
-      ctx.arc(4, -1, 2, 0, Math.PI * 2);
-      ctx.fill();
     }
 
     function drawCoins() {
@@ -868,16 +1011,17 @@
       ctx.globalAlpha = 1;
     }
 
+    // meters display (moved lower so it doesn't overlap HUD)
     function drawMeters() {
       const metersNow = Math.floor(score / 2) * 100;
       ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.beginPath();
-      ctx.roundRect(BASE_W/2 - 80, 8, 160, 34, 14);
+      ctx.roundRect(BASE_W/2 - 80, 50, 160, 34, 14);
       ctx.fill();
       ctx.fillStyle = "#fff";
       ctx.font = "13px system-ui, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(metersNow + " m", BASE_W/2, 30);
+      ctx.fillText(metersNow + " m", BASE_W/2, 72);
       ctx.textAlign = "left";
     }
 
@@ -912,7 +1056,6 @@
       ctx.fillText("max m: " + maxMetersReached, 115, 206);
 
       // play button
-      ctx.fillStyle = "linear-gradient(0)";
       const pb = homeButtons.play;
       const pGrad = ctx.createLinearGradient(pb.x, pb.y, pb.x + pb.w, pb.y + pb.h);
       pGrad.addColorStop(0, "#38bdf8");
@@ -925,7 +1068,7 @@
       ctx.font = "15px system-ui, sans-serif";
       ctx.fillText("PLAY", pb.x + 68, pb.y + 30);
 
-      // store button with cart
+      // store button
       const sb = homeButtons.store;
       ctx.fillStyle = "rgba(15,23,42,0.55)";
       ctx.beginPath();
@@ -935,14 +1078,12 @@
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillText("🛒 Store", sb.x + 14, sb.y + 24);
 
-      // hint
       ctx.fillStyle = "rgba(255,255,255,0.55)";
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillText("tap PLAY to start, or buy skins.", 66, 332);
     }
 
     function getStoreRects() {
-      // layout 2 x 2
       const rects = [];
       const startX = 36;
       const startY = 110;
@@ -968,12 +1109,9 @@
     }
 
     function onStoreSelect(skin) {
-      // if locked by meters
       if (skin.unlockMeters && maxMetersReached < skin.unlockMeters) {
-        // not enough meters, ignore
         return;
       }
-      // if not owned and has price
       if (!ownedSkins[skin.id]) {
         if (totalCoins >= skin.price) {
           totalCoins -= skin.price;
@@ -982,7 +1120,6 @@
           saveProgress();
         }
       } else {
-        // already owned -> equip
         activeSkin = skin.id;
         saveProgress();
       }
@@ -1015,14 +1152,15 @@
         ctx.roundRect(x, y, w, h, 14);
         ctx.fill();
 
-        // preview bubble
+        // preview
         ctx.save();
         ctx.translate(x + 30, y + 36);
-        const prevBird = { x: 0, y: 0 };
         const prevSkin = activeSkin;
         activeSkin = skin.id;
+        const oldBird = bird;
         bird = { x: 0, y: 0, anim: performance.now()*0.0001 };
         drawBird();
+        bird = oldBird;
         activeSkin = prevSkin;
         ctx.restore();
 
@@ -1051,10 +1189,9 @@
         ctx.fillText(owned ? "Use" : (lockedByMeters ? "Locked" : "Buy"), x + 74, y + 70);
       }
 
-      // back hint
       ctx.fillStyle = "rgba(255,255,255,0.45)";
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText("tap anywhere outside cards to stay, ESC to exit", 32, BASE_H - 30);
+      ctx.fillText("ESC to go back", 32, BASE_H - 30);
     }
 
     function drawGameOver() {
