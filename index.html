@@ -73,18 +73,15 @@
   </div>
 
   <script>
-    // base logical size (no distortion, we scale via CSS)
     const BASE_W = 360;
     const BASE_H = 540;
 
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
 
-    // set canvas to base size (logical)
     canvas.width = BASE_W;
     canvas.height = BASE_H;
 
-    // responsive fit (no stretch)
     function fitCanvas() {
       const wrap = document.getElementById("gameWrap");
       const w = wrap.clientWidth;
@@ -96,10 +93,8 @@
     window.addEventListener("resize", fitCanvas);
     fitCanvas();
 
-    // game states: "home", "playing", "paused", "gameover"
     let gameState = "home";
 
-    // constants
     const GRAVITY = 0.29;
     const FLAP = -6.5;
     const PIPE_GAP = 160;
@@ -109,19 +104,17 @@
     const SCROLL_SPEED = 1.8;
     const HITBOX_SHRINK = 0.7;
 
-    // theme fade
     let themeLerp = 0;
     let themeTarget = 0;
     const THEME_LERP_SPEED = 0.08;
 
-    // game vars
     let bird, pipes, lastPipeTime, score, best, bgClouds, groundOffset;
     best = 0;
     let coins = [];
     let totalCoins = 0;
     let particles = [];
 
-    // music stuff
+    // audio
     let audioCtx = null;
     let musicGain = null;
     let musicStarted = false;
@@ -130,7 +123,6 @@
     const pauseBtn = document.getElementById("pauseBtn");
     const muteBtn = document.getElementById("muteBtn");
 
-    // load saved coins
     try {
       const savedCoins = localStorage.getItem("flappyCoins");
       if (savedCoins !== null) totalCoins = parseInt(savedCoins, 10) || 0;
@@ -143,7 +135,7 @@
       for (let i = 0; i < 6; i++) {
         bgClouds.push({
           x: Math.random() * BASE_W,
-          y: Math.random() * 180 + 20,
+          y: Math.random() * 160 + 20,
           w: Math.random() * 60 + 40,
           h: Math.random() * 18 + 10,
           s: Math.random() * 0.5 + 0.15
@@ -179,13 +171,19 @@
       const maxTop = BASE_H - FLOOR_HEIGHT - 100;
       const minTop = 60;
       const topHeight = Math.floor(Math.random() * (maxTop - minTop) + minTop);
+      // moving pipes only after score > 10, and not all of them
+      const canMove = score > 10 && Math.random() < 0.35;
       pipes.push({
         x: BASE_W,
         top: topHeight,
-        passed: false
+        baseTop: topHeight,
+        passed: false,
+        moving: canMove,
+        amp: canMove ? (18 + Math.random() * 18) : 0,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.0018 + Math.random() * 0.0013 // slightly different speeds
       });
 
-      // occasional coin
       if (Math.random() < 0.45) {
         const gapCenter = topHeight + PIPE_GAP / 2;
         coins.push({
@@ -224,39 +222,72 @@
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       }
       musicGain = audioCtx.createGain();
-      musicGain.gain.value = 0.45;
+      musicGain.gain.value = 0.48;
       musicGain.connect(audioCtx.destination);
 
-      // simple 4-note loop, cheerful-ish
-      const tempo = 120;
-      const beat = 60 / tempo;
-      const notes = [261.63, 329.63, 392.00, 523.25]; // C E G high C
-      function scheduleLoop(t0) {
-        let t = t0;
-        for (let i = 0; i < notes.length; i++) {
-          const osc = audioCtx.createOscillator();
-          osc.type = "triangle";
-          osc.frequency.value = notes[i];
-          const g = audioCtx.createGain();
-          g.gain.setValueAtTime(0, t);
-          g.gain.linearRampToValueAtTime(1, t + 0.01);
-          g.gain.linearRampToValueAtTime(0, t + beat * 0.8);
+      // simple pop-ish loop: kick (sub), snare-ish noise, lead notes
+      const tempo = 110;
+      const beat = 60 / tempo;      // quarter
+      const bar = beat * 4;         // 4/4 bar
 
-          osc.connect(g).connect(musicGain);
-          osc.start(t);
-          osc.stop(t + beat * 0.8);
+      function scheduleBeat(startTime) {
+        for (let i = 0; i < 4; i++) {
+          const t = startTime + i * beat;
 
-          t += beat;
+          // kick: sine + short
+          const kick = audioCtx.createOscillator();
+          kick.type = "sine";
+          const kickGain = audioCtx.createGain();
+          kickGain.gain.setValueAtTime(0.9, t);
+          kickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+          kick.frequency.setValueAtTime(95, t);
+          kick.frequency.exponentialRampToValueAtTime(35, t + 0.25);
+          kick.connect(kickGain).connect(musicGain);
+          kick.start(t);
+          kick.stop(t + 0.3);
+
+          // snare on beats 2 and 4
+          if (i === 1 || i === 3) {
+            const snare = audioCtx.createBufferSource();
+            const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.15, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let j = 0; j < data.length; j++) {
+              data[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / data.length, 2);
+            }
+            const snareGain = audioCtx.createGain();
+            snareGain.gain.setValueAtTime(0.55, t);
+            snareGain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+            snare.buffer = buffer;
+            snare.connect(snareGain).connect(musicGain);
+            snare.start(t);
+          }
+
+          // lead notes on offbeats
+          const notes = [262, 330, 392, 523];
+          if (i % 2 === 0) {
+            const lead = audioCtx.createOscillator();
+            lead.type = "triangle";
+            lead.frequency.value = notes[i % notes.length];
+            const leadGain = audioCtx.createGain();
+            leadGain.gain.setValueAtTime(0, t);
+            leadGain.gain.linearRampToValueAtTime(0.4, t + 0.02);
+            leadGain.gain.linearRampToValueAtTime(0, t + beat * 0.65);
+            lead.connect(leadGain).connect(musicGain);
+            lead.start(t);
+            lead.stop(t + beat * 0.7);
+          }
         }
+
+        // reschedule next bar
         setTimeout(() => {
-          if (!muted) scheduleLoop(audioCtx.currentTime + 0.05);
-        }, beat * notes.length * 1000);
+          if (!muted) scheduleBeat(audioCtx.currentTime + 0.05);
+        }, bar * 1000);
       }
-      scheduleLoop(audioCtx.currentTime + 0.05);
+
+      scheduleBeat(audioCtx.currentTime + 0.05);
       musicStarted = true;
     }
 
-    // input
     canvas.addEventListener("mousedown", tapHandler);
     canvas.addEventListener("touchstart", (e) => {
       e.preventDefault();
@@ -264,10 +295,6 @@
     }, {passive:false});
 
     function tapHandler(e) {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      // canvas tap -> flap or start
       flap();
     }
 
@@ -303,7 +330,7 @@
         if (musicGain) musicGain.gain.value = 0;
         muteBtn.textContent = "🔈";
       } else {
-        if (musicGain) musicGain.gain.value = 0.45;
+        if (musicGain) musicGain.gain.value = 0.48;
         muteBtn.textContent = "🔊";
         startMusicIfNeeded();
       }
@@ -314,7 +341,7 @@
         c.x -= c.s;
         if (c.x + c.w < -10) {
           c.x = BASE_W + 30;
-          c.y = Math.random() * 180 + 20;
+          c.y = Math.random() * 160 + 20;
         }
       }
     }
@@ -342,7 +369,7 @@
     }
 
     function update(dt, now) {
-      // particles always update
+      // particles
       for (let p of particles) {
         p.x += p.vx;
         p.y += p.vy;
@@ -365,7 +392,6 @@
         return;
       }
 
-      // playing
       themeTarget = getThemeTargetFromScore(score);
       themeLerp += (themeTarget - themeLerp) * THEME_LERP_SPEED;
 
@@ -378,7 +404,19 @@
         lastPipeTime = now;
       }
 
-      for (let p of pipes) p.x -= SCROLL_SPEED;
+      for (let p of pipes) {
+        // horizontal
+        p.x -= SCROLL_SPEED;
+        // vertical wiggle for moving pipes
+        if (p.moving) {
+          p.top = p.baseTop + Math.sin(now * p.speed + p.phase) * p.amp;
+          // clamp so gap doesn't go below floor or off-screen
+          const maxTop = BASE_H - FLOOR_HEIGHT - 100;
+          const minTop = 40;
+          if (p.top > maxTop) p.top = maxTop;
+          if (p.top < minTop) p.top = minTop;
+        }
+      }
       pipes = pipes.filter(p => p.x + PIPE_WIDTH > -10);
 
       for (let c of coins) {
@@ -408,7 +446,7 @@
         }
       }
 
-      // pipe collision + score
+      // pipes collision + scoring
       for (let p of pipes) {
         const inX = bx + hitR > p.x && bx - hitR < p.x + PIPE_WIDTH;
         const gapTop = p.top;
@@ -439,37 +477,54 @@
       ];
     }
 
+    // prettier, less "computer" background
     function drawBackground() {
-      const dayTop = [126, 208, 255];
-      const dayMid = [201, 239, 255];
-      const dayBot = [253, 240, 213];
-      const nightTop = [7, 25, 40];
-      const nightMid = [13, 48, 71];
-      const nightBot = [32, 44, 58];
+      // sky
+      const daySkyTop = [151, 216, 255];
+      const daySkyBot = [219, 243, 255];
+      const sunsetTop = [253, 183, 144];
+      const sunsetBot = [255, 236, 205];
 
-      const top = lerpColor(dayTop, nightTop, themeLerp);
-      const mid = lerpColor(dayMid, nightMid, themeLerp);
-      const bot = lerpColor(dayBot, nightBot, themeLerp);
+      const top = lerpColor(daySkyTop, sunsetTop, themeLerp);
+      const bot = lerpColor(daySkyBot, sunsetBot, themeLerp);
 
       const grad = ctx.createLinearGradient(0,0,0,BASE_H);
       grad.addColorStop(0, `rgb(${top[0]},${top[1]},${top[2]})`);
-      grad.addColorStop(0.6, `rgb(${mid[0]},${mid[1]},${mid[2]})`);
       grad.addColorStop(1, `rgb(${bot[0]},${bot[1]},${bot[2]})`);
       ctx.fillStyle = grad;
       ctx.fillRect(0,0,BASE_W,BASE_H);
 
-      const starAlpha = themeLerp * 0.9;
-      if (starAlpha > 0.02) {
-        ctx.fillStyle = `rgba(255,255,255,${starAlpha})`;
-        for (let i = 0; i < 25; i++) {
-          const x = (i * 14 + (score*3)) % BASE_W;
-          const y = (i * 19) % 160;
-          ctx.fillRect(x, y, 2, 2);
-        }
-      }
+      // sun
+      const sunY = 80 + 40 * themeLerp;
+      ctx.fillStyle = `rgba(255,245,220,${0.9 - 0.4*themeLerp})`;
+      ctx.beginPath();
+      ctx.arc(60, sunY, 38, 0, Math.PI * 2);
+      ctx.fill();
 
+      // distant hills
+      ctx.fillStyle = `rgba(${70 - 10*themeLerp}, ${130 - 22*themeLerp}, ${95 - 12*themeLerp}, 0.9)`;
+      ctx.beginPath();
+      ctx.moveTo(0, 280);
+      ctx.quadraticCurveTo(90, 230, 180, 270);
+      ctx.quadraticCurveTo(260, 300, 360, 260);
+      ctx.lineTo(360, 360);
+      ctx.lineTo(0, 360);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = `rgba(${50 - 15*themeLerp}, ${105 - 20*themeLerp}, ${73 - 15*themeLerp}, 0.7)`;
+      ctx.beginPath();
+      ctx.moveTo(0, 310);
+      ctx.quadraticCurveTo(45, 280, 130, 315);
+      ctx.quadraticCurveTo(220, 348, 360, 320);
+      ctx.lineTo(360, 380);
+      ctx.lineTo(0, 380);
+      ctx.closePath();
+      ctx.fill();
+
+      // clouds
       for (let c of bgClouds) {
-        const cloudAlpha = 0.9 - 0.7 * themeLerp;
+        const cloudAlpha = 0.8 - 0.5 * themeLerp;
         ctx.fillStyle = `rgba(255,255,255,${cloudAlpha})`;
         ctx.beginPath();
         ctx.roundRect(c.x, c.y, c.w, c.h, 12);
@@ -498,6 +553,12 @@
         ctx.fillRect(p.x, p.top + PIPE_GAP, PIPE_WIDTH, bottomH);
         ctx.fillStyle = lipColor;
         ctx.fillRect(p.x - 3, p.top + PIPE_GAP, PIPE_WIDTH + 6, 16);
+
+        // mark moving pipes subtly
+        if (p.moving) {
+          ctx.fillStyle = "rgba(255,255,255,0.35)";
+          ctx.fillRect(p.x + PIPE_WIDTH/2 - 4, p.top - 22, 8, 8);
+        }
       }
     }
 
@@ -525,7 +586,6 @@
         : Math.min(Math.max(bird.vy / 10, -0.45), 0.6);
       ctx.rotate(tilt);
 
-      // single clean skin
       const base1 = lerpColor([255,217,102],[255,226,168], themeLerp);
       const base2 = lerpColor([255,174,0],[255,193,78], themeLerp);
       const wingCol = lerpColor([255,233,168],[255,244,216], themeLerp);
@@ -630,7 +690,6 @@
       ctx.font = "bold 26px system-ui, sans-serif";
       ctx.fillText(score.toString(), 20, 42);
 
-      // coins
       ctx.fillStyle = "#fff";
       ctx.font = "12px system-ui, sans-serif";
       ctx.fillText("Coins: " + totalCoins, 80, 28);
@@ -681,7 +740,6 @@
       ctx.fillText("Best: " + best, cx + 30, cy + 100);
       ctx.fillText("Coins: " + totalCoins, cx + 30, cy + 122);
 
-      // button
       const bw = cardW - 50, bh = 44;
       const bx = cx + 25, by = cy + 134;
       const btnGrad = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
